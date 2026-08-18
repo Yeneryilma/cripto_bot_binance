@@ -1,0 +1,25 @@
+{
+  "name": "crypto-trader",
+  "version": "1.0.0",
+  "description": "Professional Crypto Futures Trading Analysis Platform",
+  "main": "backend.py",
+  "scripts": {
+    "start": "python backend.py",
+    "dev": "python backend.py --debug"
+  },
+  "dependencies": {
+    "flask": "2.3.3",
+    "flask-cors": "4.0.0",
+    "yfinance": "0.10.1",
+    "pandas": "2.1.4",
+    "numpy": "1.24.3",
+    "requests": "2.31.0",
+    "websockets": "12.0",
+    "ccxt": "4.2.23",
+    "python-dateutil": "2.8.2",
+    "pytz": "2023.3"
+  },
+  "keywords": ["crypto", "trading", "futures", "analysis", "technical indicators"],
+  "author": "Professional Trading System",
+  "license": "MIT"
+}

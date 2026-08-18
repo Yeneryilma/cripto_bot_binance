@@ -1,0 +1,1058 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kripto Para Futures Analiz Sistemi</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-secondary: #111827;
+            --bg-card: #1a1f2e;
+            --bg-card-hover: #232b3d;
+            --text-primary: #e5e7eb;
+            --text-secondary: #9ca3af;
+            --text-muted: #6b7280;
+            --accent-green: #22c55e;
+            --accent-red: #ef4444;
+            --accent-blue: #3b82f6;
+            --accent-yellow: #eab308;
+            --accent-purple: #8b5cf6;
+            --border-color: #1f2937;
+            --border-hover: #374151;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        .container { max-width: 1400px; margin: 0 auto; padding: 16px; }
+
+        /* Header */
+        .header {
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 12px 0;
+            position: sticky; top: 0; z-index: 100;
+        }
+        .header .container {
+            display: flex; align-items: center; justify-content: space-between;
+        }
+        .logo {
+            display: flex; align-items: center; gap: 10px;
+            font-size: 20px; font-weight: 700;
+        }
+        .logo i { color: var(--accent-yellow); font-size: 24px; }
+        .logo span { background: linear-gradient(135deg, var(--accent-yellow), var(--accent-purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .header-status {
+            display: flex; align-items: center; gap: 16px; font-size: 13px;
+        }
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+        }
+        .status-dot.active { background: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+        .status-dot.inactive { background: var(--accent-red); }
+
+        /* Market Overview Bar */
+        .market-bar {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 12px; margin: 16px 0;
+        }
+        .market-card {
+            background: var(--bg-card); border-radius: 12px; padding: 16px;
+            border: 1px solid var(--border-color); transition: all 0.2s;
+        }
+        .market-card:hover { border-color: var(--border-hover); }
+        .market-card .label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+        .market-card .value { font-size: 18px; font-weight: 600; }
+        .market-card .change { font-size: 13px; margin-top: 4px; }
+        .positive { color: var(--accent-green); }
+        .negative { color: var(--accent-red); }
+        .neutral { color: var(--text-muted); }
+
+        /* Section Titles */
+        .section-title {
+            font-size: 18px; font-weight: 600; margin: 24px 0 16px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .section-title i { font-size: 16px; color: var(--accent-yellow); }
+
+        /* News */
+        .news-list { display: flex; flex-direction: column; gap: 10px; }
+        .news-item {
+            background: var(--bg-card); border-radius: 8px; padding: 12px 16px;
+            border-left: 3px solid var(--accent-blue); cursor: pointer;
+            transition: all 0.2s;
+        }
+        .news-item:hover { background: var(--bg-card-hover); }
+        .news-item .news-title { font-size: 13px; font-weight: 500; margin-bottom: 4px; }
+        .news-item .news-meta { font-size: 11px; color: var(--text-muted); }
+
+        /* Signal Confidence Meter */
+        .confidence-bar {
+            height: 4px; border-radius: 2px; background: var(--bg-secondary);
+            margin: 6px 0; overflow: hidden;
+        }
+        .confidence-fill {
+            height: 100%; border-radius: 2px; transition: width 0.5s;
+        }
+        .confidence-fill.high { background: var(--accent-green); }
+        .confidence-fill.medium { background: var(--accent-yellow); }
+        .confidence-fill.low { background: var(--accent-red); }
+
+        /* Loading */
+        .loading {
+            text-align: center; padding: 40px; color: var(--text-muted);
+        }
+        .loading i { font-size: 32px; margin-bottom: 12px; animation: spin 1s linear infinite; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+        /* Tabs */
+        .tabs {
+            display: flex; gap: 4px; margin-bottom: 16px;
+            background: var(--bg-secondary); border-radius: 8px; padding: 4px;
+            overflow-x: auto;
+        }
+        .tab {
+            padding: 8px 16px; border-radius: 6px; cursor: pointer;
+            font-size: 13px; font-weight: 500; white-space: nowrap;
+            transition: all 0.2s; border: none; background: none; color: var(--text-muted);
+        }
+        .tab.active { background: var(--accent-blue); color: white; }
+        .tab:hover:not(.active) { color: var(--text-primary); }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .coin-grid { grid-template-columns: 1fr; }
+            .detail-grid { grid-template-columns: 1fr; }
+            .market-bar { grid-template-columns: 1fr 1fr; }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-primary); }
+        ::-webkit-scrollbar-thumb { background: var(--border-hover); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        .timeframe-selector {
+            display: flex; gap: 8px; align-items: center; margin-bottom: 12px;
+        }
+        .tf-btn {
+            padding: 4px 10px; border-radius: 4px; cursor: pointer;
+            font-size: 11px; font-weight: 500; border: 1px solid var(--border-color);
+            background: var(--bg-secondary); color: var(--text-muted); transition: all 0.2s;
+        }
+        .tf-btn.active { background: var(--accent-blue); color: white; border-color: var(--accent-blue); }
+
+        .trading-view-modal {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="container">
+        <div class="logo">
+            <i class="fas fa-chart-line"></i>
+            <span>Kripto Futures Analiz</span>
+        </div>
+        <div class="header-status">
+            <span><span class="status-dot active" id="statusDot"></span> <span id="statusText">Sistem Aktif</span></span>
+            <span id="clock" style="color: var(--text-muted);"></span>
+            <button onclick="refreshAll()" style="background: none; border: none; color: var(--text-muted); cursor: pointer;">
+                <i class="fas fa-sync-alt"></i>
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- Market Overview -->
+    <div class="market-bar" id="marketOverview">
+        <div class="market-card"><div class="label">Piyasa Değeri</div><div class="value" id="totalMc">-</div></div>
+        <div class="market-card"><div class="label">24s Hacim</div><div class="value" id="totalVol">-</div></div>
+        <div class="market-card"><div class="label">BTC Dominans</div><div class="value" id="btcDom">-</div></div>
+        <div class="market-card"><div class="label">BTC $</div><div class="value" id="btcPrice">-</div><div class="change" id="btcChange"></div></div>
+        <div class="market-card"><div class="label">ETH $</div><div class="value" id="ethPrice">-</div><div class="change" id="ethChange"></div></div>
+        <div class="market-card"><div class="label">Aktif Kripto</div><div class="value" id="activeCoins">-</div></div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+        <button class="tab active" onclick="switchTab('scalp')"><i class="fas fa-bolt"></i> Scalp Radar</button>
+        <button class="tab" onclick="switchTab('news')"><i class="fas fa-newspaper"></i> Haberler</button>
+        <button class="tab" onclick="switchTab('ozet')"><i class="fas fa-chart-pie"></i> Ozet</button>
+        <button class="tab" onclick="switchTab('islem')"><i class="fas fa-exchange-alt"></i> Islem</button>
+        <button class="tab" onclick="switchTab('settings')"><i class="fas fa-cog"></i> Ayarlar</button>
+    </div>
+
+    <!-- Tab: Haberler -->
+    <div id="tabNews" class="tab-content" style="display:none;">
+        <div class="section-title"><i class="fas fa-newspaper"></i> Kripto Haberleri</div>
+        <div id="newsList" class="news-list"></div>
+    </div>
+
+    <!-- Tab: Ozet -->
+    <div id="tabOzet" class="tab-content" style="display:none;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+            <div class="section-title" style="margin:0;"><i class="fas fa-chart-pie"></i> Islem Ozeti</div>
+            <button onclick="resetStats()" style="padding:6px 14px;border:1px solid var(--accent-red);background:transparent;color:var(--accent-red);border-radius:6px;cursor:pointer;font-size:12px;">Sifirla</button>
+        </div>
+        <div id="summaryContent"></div>
+    </div>
+
+    <!-- Tab: Scalp Radar -->
+    <div id="tabScalp" class="tab-content">
+        <div class="section-title"><i class="fas fa-bolt"></i> Scalp Radar Listesi</div>
+        <div class="timeframe-selector">
+            <span style="font-size:13px;color:var(--text-muted);">Zaman Dilimi:</span>
+            <button class="tf-btn active" onclick="setScalpTf('1m', this)">1m</button>
+            <button class="tf-btn" onclick="setScalpTf('3m', this)">3m</button>
+            <button class="tf-btn" onclick="setScalpTf('5m', this)">5m</button>
+            <button class="tf-btn" onclick="setScalpTf('15m', this)">15m</button>
+        </div>
+        <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                <thead>
+                    <tr style="background:var(--bg-secondary);text-align:left;">
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Coin</th>
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Yön</th>
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Fiyat</th>
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Sinyal</th>
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Güven</th>
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Volatilite</th>
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Trend</th>
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Stop Loss</th>
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Take Kar</th>
+                        <th style="padding:10px 12px;border-bottom:1px solid var(--border-color);">Not</th>
+                    </tr>
+                </thead>
+                <tbody id="scalpTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Tab: Paper Trading -->
+    <!-- Tab: Islem (Test/Live) -->
+    <div id="tabIslem" class="tab-content" style="display:none;">
+        <div class="section-title"><i class="fas fa-exchange-alt"></i> Islem Paneli</div>
+
+        <div class="market-card" style="margin-bottom:16px;">
+            <div class="label">Islem Modu</div>
+            <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap;">
+                <button onclick="switchActiveMode('test')" id="btnModeTest" style="padding:14px 32px;border:2px solid #2196f3;background:#2196f3;color:white;border-radius:8px;cursor:pointer;font-size:15px;font-weight:600;">
+                    <i class="fas fa-flask"></i> TEST (Testnet)
+                </button>
+                <button onclick="switchActiveMode('live')" id="btnModeLive" style="padding:14px 32px;border:2px solid #666;background:transparent;color:var(--text-muted);border-radius:8px;cursor:pointer;font-size:15px;font-weight:600;">
+                    <i class="fas fa-money-bill-wave"></i> LIVE (Gercek Para)
+                </button>
+            </div>
+            <div id="activeModeInfo" style="margin-top:12px;font-size:14px;color:var(--text-muted);"></div>
+        </div>
+
+        <div class="market-card" style="margin-bottom:16px;">
+            <div class="label">Kontrol</div>
+            <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+                <button onclick="startLive()" class="btn-success" style="padding:10px 20px;">
+                    <i class="fas fa-play"></i> Baslat
+                </button>
+                <button onclick="waitLive()" style="padding:10px 20px;background:#ff9800;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">
+                    <i class="fas fa-pause"></i> Bekle
+                </button>
+                <button onclick="stopLive()" class="btn-danger" style="padding:10px 20px;">
+                    <i class="fas fa-stop"></i> Durdur
+                </button>
+                <button onclick="closeAllLive()" style="padding:10px 20px;background:#9c27b0;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:600;">
+                    <i class="fas fa-times-circle"></i> Tumunu Kapat
+                </button>
+                <button onclick="refreshIslem()" class="btn-secondary" style="padding:10px 20px;">
+                    <i class="fas fa-sync"></i> Yenile
+                </button>
+            </div>
+            <div id="islemStatus" style="margin-top:12px;font-size:14px;color:var(--text-muted);"></div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;">
+            <div class="market-card" id="islemBalanceCard">
+                <div class="label">Bakiye</div>
+                <div class="value">$0.00</div>
+                <div class="subtext">Kilitli: $0.00 | Kullanilabilir: $0.00</div>
+            </div>
+            <div class="market-card" id="islemPnlCard">
+                <div class="label">Acik Kar/Zarar</div>
+                <div class="value">$0.00</div>
+                <div class="subtext">Islem: 0 | Kazanma: %0</div>
+            </div>
+            <div class="market-card" id="islemKapaliCard">
+                <div class="label">Kapanan Islemler K/Z</div>
+                <div class="value">$0.00</div>
+                <div class="subtext">Toplam kapali kar/zarar</div>
+            </div>
+        </div>
+
+        <div class="market-card" style="margin-bottom:16px;">
+            <div class="label">Acik Pozisyonlar</div>
+            <div id="islemPositions" style="margin-top:8px;font-size:13px;color:var(--text-muted);">Pozisyon yok.</div>
+        </div>
+
+        <div class="market-card">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <div class="label" style="margin:0;">Islem Gecmisi (Son 50)</div>
+                <button onclick="clearHistory()" style="padding:4px 10px;background:#f44336;color:white;border:none;border-radius:4px;cursor:pointer;font-size:10px;">Gecmisi Temizle</button>
+            </div>
+            <div id="islemHistory" style="margin-top:8px;font-size:11px;color:var(--text-muted);">Gecmis yok.</div>
+        </div>
+    </div>
+
+    <div id="tabSettings" class="tab-content" style="display:none;">
+        <div class="section-title"><i class="fas fa-cog"></i> Paper Trader Ayarlari</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:16px;">
+            <div class="market-card">
+                <div class="label">Islem Basi ($)</div>
+                <input type="number" id="setIslemBasi" value="50" step="1" min="1" max="10000" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+            </div>
+            <div class="market-card">
+                <div class="label">Kaldirac (x)</div>
+                <input type="number" id="setKaldirac" value="1" step="1" min="1" max="50" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+            </div>
+            <div class="market-card">
+                <div class="label">Coin Adedi (top N tara)</div>
+                <input type="number" id="setCoinAdedi" value="100" step="10" min="10" max="500" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+            </div>
+            <div class="market-card">
+                <div class="label">Min Fiyat ($)</div>
+                <input type="number" id="setMinPrice" value="0.01" step="0.001" min="0" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+            </div>
+            <div class="market-card">
+                <div class="label">Sabit Stop (%)</div>
+                <input type="number" id="setSabitStop" value="2.0" step="0.5" min="0.5" max="50" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+                <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">Pozisyon acildiginda baslangic stopu</div>
+            </div>
+            <div class="market-card">
+                <div class="label">Trailing Stop (%)</div>
+                <input type="number" id="setTrailingStop" value="3.0" step="0.1" min="0.5" max="20" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+                <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">Kardayken fiyati takip eden stop</div>
+            </div>
+            <div class="market-card">
+                <div class="label">Kismi Satis Kar Hedefi (%)</div>
+                <input type="number" id="setKisKarHedef" value="1.0" step="0.1" min="0.1" max="10" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+                <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">Bu kara ulasinca kismi satis baslar</div>
+            </div>
+            <div class="market-card">
+                <div class="label">Kismi Satis Yuzdesi (%)</div>
+                <input type="number" id="setKisSatYuzde" value="25" step="5" min="10" max="90" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+                <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">Hedef karda kac yuzdesi satilir, sonra stop girise cekilir</div>
+            </div>
+            <div class="market-card">
+                <div class="label">Max Pozisyon</div>
+                <input type="number" id="setMaxPos" value="20" step="1" min="1" max="50" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+            </div>
+            <div class="market-card">
+                <div class="label">Min Guven Puani</div>
+                <input type="number" id="setMinGuven" value="30" step="5" min="10" max="100" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+            </div>
+            <div class="market-card">
+                <div class="label">Min Sinyal Puani</div>
+                <input type="number" id="setMinSP" value="2" step="1" min="1" max="10" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+            </div>
+            <div class="market-card">
+                <div class="label">Tarama Zaman Dilimleri</div>
+                <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;" id="tfCheckboxes">
+                    <label style="font-size:12px;display:flex;align-items:center;gap:3px;"><input type="checkbox" value="1m" class="tfCheck" checked> 1m</label>
+                    <label style="font-size:12px;display:flex;align-items:center;gap:3px;"><input type="checkbox" value="3m" class="tfCheck" checked> 3m</label>
+                    <label style="font-size:12px;display:flex;align-items:center;gap:3px;"><input type="checkbox" value="5m" class="tfCheck" checked> 5m</label>
+                    <label style="font-size:12px;display:flex;align-items:center;gap:3px;"><input type="checkbox" value="15m" class="tfCheck" checked> 15m</label>
+                </div>
+            </div>
+            <div class="market-card">
+                <div class="label">Soguma Suresi (dk)</div>
+                <input type="number" id="setSoguma" value="60" step="1" min="0" max="1440" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+            </div>
+            <div class="market-card" style="grid-column:1/-1;">
+                <div class="label">Kara Liste (isleme alinmayacak coinler, virgullu)</div>
+                <input type="text" id="setKaraListe" value="" placeholder="BTC/USDT, ETH/USDT" style="width:100%;padding:6px 8px;background:var(--bg-primary);border:1px solid var(--border-color);color:var(--text-primary);border-radius:4px;font-size:13px;margin-top:4px;">
+            </div>
+        </div>
+        <button onclick="saveSettings()" style="padding:10px 24px;background:var(--accent-green);color:white;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;"><i class="fas fa-save"></i> Kaydet</button>
+        <button onclick="loadSettings()" style="padding:10px 24px;background:var(--bg-secondary);color:var(--text-primary);border:1px solid var(--border-color);border-radius:6px;font-size:13px;cursor:pointer;margin-left:8px;"><i class="fas fa-sync"></i> Yenile</button>
+        <div id="settingsMsg" style="margin-top:10px;font-size:12px;color:var(--accent-green);display:none;"></div>
+    </div>
+
+</div>
+
+<script>
+// ============================
+// STATE
+// ============================
+let allCoins = [];
+let scalpTf = '1m';
+
+// ============================
+// CLOCK
+// ============================
+function updateClock() {
+    const now = new Date();
+    document.getElementById('clock').textContent = now.toLocaleTimeString('tr-TR', {hour12:false});
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ============================
+// API CALLS
+// ============================
+const API_BASE = 'http://localhost:5000';
+
+async function fetchAPI(endpoint, options = {}) {
+    try {
+        const fetchOpts = { headers: {} };
+        if (options.method) fetchOpts.method = options.method;
+        if (options.body) {
+            fetchOpts.headers['Content-Type'] = 'application/json';
+            fetchOpts.body = options.body;
+        }
+        const res = await fetch(`${API_BASE}${endpoint}`, fetchOpts);
+        const payload = await res.json().catch(() => null);
+        if (!res.ok) {
+            return payload || { error: `HTTP ${res.status}`, reason: 'Sunucudan yanit alinmadi.' };
+        }
+        return payload;
+    } catch(e) {
+        console.error(`API Error: ${endpoint}`, e);
+        return { error: 'Baglanti hatasi', reason: e.message };
+    }
+}
+
+// ============================
+// MARKET OVERVIEW
+// ============================
+async function loadMarketOverview() {
+    const data = await fetchAPI('/api/market/overview');
+    if (!data) return;
+
+    const p = data.piyasa || {};
+    document.getElementById('totalMc').textContent = p.total_market_cap ? '$' + formatLarge(p.total_market_cap) : '-';
+    document.getElementById('totalVol').textContent = p.total_volume_24h ? '$' + formatLarge(p.total_volume_24h) : '-';
+    document.getElementById('btcDom').textContent = p.btc_dominance ? p.btc_dominance.toFixed(1) + '%' : '-';
+    document.getElementById('activeCoins').textContent = p.active_cryptocurrencies || '-';
+
+    if (data.btc) {
+        document.getElementById('btcPrice').textContent = '$' + formatPrice(data.btc.price);
+        const ch = data.btc.change_24h || 0;
+        document.getElementById('btcChange').innerHTML = `${ch > 0 ? '+' : ''}${ch.toFixed(2)}%`;
+        document.getElementById('btcChange').className = ch >= 0 ? 'change positive' : 'change negative';
+    }
+    if (data.eth) {
+        document.getElementById('ethPrice').textContent = '$' + formatPrice(data.eth.price);
+        const ch = data.eth.change_24h || 0;
+        document.getElementById('ethChange').innerHTML = `${ch > 0 ? '+' : ''}${ch.toFixed(2)}%`;
+        document.getElementById('ethChange').className = ch >= 0 ? 'change positive' : 'change negative';
+    }
+}
+
+function formatLarge(num) {
+    if (!num) return '0';
+    if (num >= 1e12) return (num / 1e12).toFixed(2) + 'T';
+    if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+    if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+    return num.toFixed(0);
+}
+
+function formatPrice(num) {
+    if (!num) return '0';
+    if (num < 0.01) return num.toFixed(6);
+    if (num < 1) return num.toFixed(4);
+    if (num < 100) return num.toFixed(2);
+    return num.toLocaleString('en-US', {maximumFractionDigits:2});
+}
+
+// ============================
+// NEWS
+// ============================
+async function loadNews() {
+    const container = document.getElementById('newsList');
+    container.innerHTML = '<div class="loading"><i class="fas fa-spinner"></i><br>Haberler yükleniyor...</div>';
+
+    const data = await fetchAPI('/api/market/news');
+    if (!data || !data.haberler) {
+        container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted);">Haber alınamadı</div>';
+        return;
+    }
+
+    container.innerHTML = '';
+    data.haberler.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'news-item';
+        div.onclick = () => window.open(item.url, '_blank');
+        div.innerHTML = `
+            <div class="news-title">${item.title}</div>
+            <div class="news-meta">${item.source || 'Kripto Haber'} | ${item.published ? new Date(item.published).toLocaleDateString('tr-TR') : 'Az önce'}</div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+// ============================
+// SCALP RADAR
+// ============================
+async function loadScalpRadar() {
+    const tbody = document.getElementById('scalpTableBody');
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--text-muted);"><i class="fas fa-spinner fa-spin"></i> Taranıyor...</td></tr>';
+
+    const data = await fetchAPI('/api/market/all?timeframe=' + scalpTf);
+    if (!data || data.error || !Array.isArray(data.sonuclar) || data.sonuclar.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--text-muted);">Veri alınamadı</td></tr>';
+        return;
+    }
+
+    allCoins = data.sonuclar;
+    renderScalpFromCoins(allCoins);
+}
+
+function renderScalpFromCoins(coins) {
+    const tbody = document.getElementById('scalpTableBody');
+    if (!coins || coins.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--text-muted);">Veri yok</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = '';
+    coins.forEach(coin => {
+        const confidence = coin.guven_puani || 0;
+        const change = coin.degisim_24h || 0;
+        const trend = coin.trend || 'NOTR';
+        const primary = (coin.tf_signals && coin.tf_signals[scalpTf]) || coin.sinyal_primary || coin.best_tf_signal || {};
+        const signals = primary.sinyaller || [];
+        const buyS = signals.filter(s => s.tip === 'AL').length;
+        const sellS = signals.filter(s => s.tip === 'SAT').length;
+        const oneri = primary.islem_onerisi || null;
+
+        let direction = 'NOTR', dirClass = 'neutral';
+        if (buyS > sellS && confidence > 30) { direction = 'LONG'; dirClass = 'positive'; }
+        else if (sellS > buyS && confidence > 30) { direction = 'SHORT'; dirClass = 'negative'; }
+
+        let note = '';
+        if (confidence > 70) note = 'GÜÇLÜ FIRSAT';
+        else if (confidence > 50) note = 'İzlenebilir';
+        else if (buyS === 0 && sellS === 0) note = 'Sinyal yok';
+
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid var(--border-color)';
+        tr.innerHTML = `
+            <td style="padding:10px 12px;font-weight:600;">${coin.sembol.replace('/USDT', '')}</td>
+            <td style="padding:10px 12px;color:var(--accent-${direction === 'LONG' ? 'green' : direction === 'SHORT' ? 'red' : 'muted'});font-weight:600;">${direction}</td>
+            <td style="padding:10px 12px;">$${formatPrice(coin.fiyat)}</td>
+            <td style="padding:10px 12px;"><span style="color:var(--accent-green)">${buyS}</span>/<span style="color:var(--accent-red)">${sellS}</span></td>
+            <td style="padding:10px 12px;">
+                <div class="confidence-bar" style="width:80px;display:inline-block;vertical-align:middle;">
+                    <div class="confidence-fill ${confidence >= 60 ? 'high' : confidence >= 30 ? 'medium' : 'low'}" style="width:${Math.min(confidence, 100)}%"></div>
+                </div>
+                <span style="font-size:12px;margin-left:4px;">${confidence}/100</span>
+            </td>
+            <td style="padding:10px 12px;color:${Math.abs(change) > 3 ? 'var(--accent-yellow)' : 'var(--text-muted)'}">${Math.abs(change).toFixed(1)}%</td>
+            <td style="padding:10px 12px;color:${trend === 'YUKSELIS' ? 'var(--accent-green)' : trend === 'DUSUS' ? 'var(--accent-red)' : 'var(--text-muted)'}">${trend}</td>
+            <td style="padding:10px 12px;color:var(--accent-red);font-size:12px;">${oneri ? '$' + formatPrice(oneri.stop_loss) : '-'}</td>
+            <td style="padding:10px 12px;color:var(--accent-green);font-size:12px;">${oneri ? '$' + formatPrice(oneri.take_kar_1) : '-'}</td>
+            <td style="padding:10px 12px;color:var(--text-muted);font-size:12px;">${note}</td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+// ============================
+// PAPER TRADER
+// ============================
+// ===== ESKI PAPER FONKSIYONLARI KALDIRILDI =====
+
+// ============================
+// OZET SAYFASI
+// ============================
+async function loadSummary() {
+    const div = document.getElementById('summaryContent');
+    div.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);">Yukleniyor...</div>';
+    try {
+        const res = await fetch('/api/live/summary');
+        const d = await res.json();
+        const pnlColor = (d.net_kar_zarar || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+        const wrColor = (d.kazanma_orani || 0) >= 50 ? 'var(--accent-green)' : 'var(--accent-red)';
+        let html = '';
+
+        html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px;">';
+        html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;text-align:center;"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Toplam Islem</div><div style="font-size:22px;font-weight:700;">' + (d.toplam_islem || 0) + '</div></div>';
+        html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;text-align:center;"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Kazanma Orani</div><div style="font-size:22px;font-weight:700;color:' + wrColor + ';">%' + (d.kazanma_orani || 0).toFixed(1) + '</div></div>';
+        html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;text-align:center;"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Net Kar/Zarar</div><div style="font-size:22px;font-weight:700;color:' + pnlColor + ';">$' + (d.net_kar_zarar || 0).toFixed(2) + '</div></div>';
+        html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;text-align:center;"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Toplam Kazanc</div><div style="font-size:22px;font-weight:700;color:var(--accent-green);">$' + (d.toplam_kar || 0).toFixed(2) + '</div></div>';
+        html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;text-align:center;"><div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">Toplam Zarar</div><div style="font-size:22px;font-weight:700;color:var(--accent-red);">$' + (d.toplam_zarar || 0).toFixed(2) + '</div></div>';
+        html += '</div>';
+
+        html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">';
+        html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;">';
+        html += '<div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-primary);">Islem Dagilimi</div>';
+        html += '<div class="detail-row"><span class="label">Kazanan</span><span class="value positive">' + (d.kazanan || 0) + '</span></div>';
+        html += '<div class="detail-row"><span class="label">Kaybeden</span><span class="value negative">' + (d.kaybeden || 0) + '</span></div>';
+        html += '<div class="detail-row"><span class="label">Notr</span><span class="value">' + (d.notr || 0) + '</span></div>';
+        html += '<div class="detail-row"><span class="label">Ort. Kazanc</span><span class="value positive">$' + (d.ortalama_kar || 0).toFixed(2) + '</span></div>';
+        html += '<div class="detail-row"><span class="label">Ort. Zarar</span><span class="value negative">$' + (d.ortalama_zarar || 0).toFixed(2) + '</span></div>';
+        html += '</div>';
+
+        html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;">';
+        html += '<div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-primary);">Yon Dagilimi</div>';
+        html += '<div class="detail-row"><span class="label">Long Islem</span><span class="value">' + (d.long_sayisi || 0) + '</span></div>';
+        html += '<div class="detail-row"><span class="label">  Long Kazanan</span><span class="value positive">' + (d.long_kazanan || 0) + '</span></div>';
+        html += '<div class="detail-row"><span class="label">  Long Kaybeden</span><span class="value negative">' + (d.long_kaybeden || 0) + '</span></div>';
+        html += '<div class="detail-row"><span class="label">Short Islem</span><span class="value">' + (d.short_sayisi || 0) + '</span></div>';
+        html += '<div class="detail-row"><span class="label">  Short Kazanan</span><span class="value positive">' + (d.short_kazanan || 0) + '</span></div>';
+        html += '<div class="detail-row"><span class="label">  Short Kaybeden</span><span class="value negative">' + (d.short_kaybeden || 0) + '</span></div>';
+        html += '</div>';
+        html += '</div>';
+
+        if (d.en_cok_kar) {
+            html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">';
+            html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;">';
+            html += '<div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--accent-green);">En Cok Kar Eden Islem</div>';
+            html += '<div class="detail-row"><span class="label">Coin</span><span class="value" style="font-weight:600;">' + (d.en_cok_kar.symbol || '-') + '</span></div>';
+            html += '<div class="detail-row"><span class="label">Yon</span><span class="value">' + (d.en_cok_kar.direction || '-') + '</span></div>';
+            html += '<div class="detail-row"><span class="label">Kar</span><span class="value positive" style="font-size:16px;font-weight:700;">$' + (d.en_cok_kar.pnl || 0).toFixed(2) + '</span></div>';
+            html += '<div class="detail-row"><span class="label">Giris</span><span class="value">$' + (d.en_cok_kar.entry_price || 0).toFixed(4) + '</span></div>';
+            html += '<div class="detail-row"><span class="label">Cikis</span><span class="value">$' + (d.en_cok_kar.close_price || 0).toFixed(4) + '</span></div>';
+            html += '</div>';
+            html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;">';
+            html += '<div style="font-size:13px;font-weight:600;margin-bottom:8px;color:var(--accent-red);">En Cok Zarar Eden Islem</div>';
+            html += '<div class="detail-row"><span class="label">Coin</span><span class="value" style="font-weight:600;">' + (d.en_cok_zarar.symbol || '-') + '</span></div>';
+            html += '<div class="detail-row"><span class="label">Yon</span><span class="value">' + (d.en_cok_zarar.direction || '-') + '</span></div>';
+            html += '<div class="detail-row"><span class="label">Zarar</span><span class="value negative" style="font-size:16px;font-weight:700;">$' + (d.en_cok_zarar.pnl || 0).toFixed(2) + '</span></div>';
+            html += '<div class="detail-row"><span class="label">Giris</span><span class="value">$' + (d.en_cok_zarar.entry_price || 0).toFixed(4) + '</span></div>';
+            html += '<div class="detail-row"><span class="label">Cikis</span><span class="value">$' + (d.en_cok_zarar.close_price || 0).toFixed(4) + '</span></div>';
+            html += '</div>';
+            html += '</div>';
+        }
+
+        if (d.tf_dagilimi && Object.keys(d.tf_dagilimi).length > 0) {
+            html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;margin-bottom:16px;">';
+            html += '<div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-primary);">Zaman Periyoduna Gore</div>';
+            html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+            html += '<thead><tr style="border-bottom:1px solid var(--border-color);">';
+            html += '<th style="padding:6px 8px;text-align:left;color:var(--text-muted);">Periyot</th>';
+            html += '<th style="padding:6px 8px;text-align:center;color:var(--text-muted);">Islem</th>';
+            html += '<th style="padding:6px 8px;text-align:center;color:var(--accent-green);">Kazanan</th>';
+            html += '<th style="padding:6px 8px;text-align:center;color:var(--accent-red);">Kaybeden</th>';
+            html += '<th style="padding:6px 8px;text-align:right;color:var(--text-muted);">Kar/Zarar</th>';
+            html += '</tr></thead><tbody>';
+            for (const [tf, v] of Object.entries(d.tf_dagilimi).sort((a,b) => b[1].sayi - a[1].sayi)) {
+                const tfPnl = (v.toplam_pnl || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                html += '<tr style="border-bottom:1px solid var(--border-color);">';
+                html += '<td style="padding:6px 8px;font-weight:600;">' + tf + '</td>';
+                html += '<td style="padding:6px 8px;text-align:center;">' + v.sayi + '</td>';
+                html += '<td style="padding:6px 8px;text-align:center;color:var(--accent-green);">' + v.kazanan + '</td>';
+                html += '<td style="padding:6px 8px;text-align:center;color:var(--accent-red);">' + v.kaybeden + '</td>';
+                html += '<td style="padding:6px 8px;text-align:right;color:' + tfPnl + ';font-weight:600;">$' + (v.toplam_pnl || 0).toFixed(2) + '</td>';
+                html += '</tr>';
+            }
+            html += '</tbody></table></div>';
+        }
+
+        if (d.sebep_dagilimi && Object.keys(d.sebep_dagilimi).length > 0) {
+            html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;margin-bottom:16px;">';
+            html += '<div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-primary);">Kapanis Sebebine Gore</div>';
+            html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+            html += '<thead><tr style="border-bottom:1px solid var(--border-color);">';
+            html += '<th style="padding:6px 8px;text-align:left;color:var(--text-muted);">Sebep</th>';
+            html += '<th style="padding:6px 8px;text-align:center;color:var(--text-muted);">Islem</th>';
+            html += '<th style="padding:6px 8px;text-align:right;color:var(--text-muted);">Toplam PnL</th>';
+            html += '</tr></thead><tbody>';
+            for (const [sebep, v] of Object.entries(d.sebep_dagilimi).sort((a,b) => b[1].sayi - a[1].sayi)) {
+                const sPnl = (v.toplam_pnl || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                html += '<tr style="border-bottom:1px solid var(--border-color);">';
+                html += '<td style="padding:6px 8px;font-weight:600;">' + sebep + '</td>';
+                html += '<td style="padding:6px 8px;text-align:center;">' + v.sayi + '</td>';
+                html += '<td style="padding:6px 8px;text-align:right;color:' + sPnl + ';font-weight:600;">$' + (v.toplam_pnl || 0).toFixed(2) + '</td>';
+                html += '</tr>';
+            }
+            html += '</tbody></table></div>';
+        }
+
+        if (d.en_cok_islem_yapilanlar && d.en_cok_islem_yapilanlar.length > 0) {
+            html += '<div style="background:var(--bg-card);border-radius:10px;padding:14px;margin-bottom:16px;">';
+            html += '<div style="font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-primary);">En Cok Islem Yapilan Coinler</div>';
+            html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+            html += '<thead><tr style="border-bottom:1px solid var(--border-color);">';
+            html += '<th style="padding:6px 8px;text-align:left;color:var(--text-muted);">Coin</th>';
+            html += '<th style="padding:6px 8px;text-align:center;color:var(--text-muted);">Islem</th>';
+            html += '<th style="padding:6px 8px;text-align:center;color:var(--accent-green);">K</th>';
+            html += '<th style="padding:6px 8px;text-align:center;color:var(--accent-red);">Z</th>';
+            html += '<th style="padding:6px 8px;text-align:right;color:var(--text-muted);">Kar/Zarar</th>';
+            html += '</tr></thead><tbody>';
+            for (const c of d.en_cok_islem_yapilanlar) {
+                const cPnl = (c.toplam_pnl || 0) >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+                html += '<tr style="border-bottom:1px solid var(--border-color);">';
+                html += '<td style="padding:6px 8px;font-weight:600;">' + c.symbol + '</td>';
+                html += '<td style="padding:6px 8px;text-align:center;">' + c.sayi + '</td>';
+                html += '<td style="padding:6px 8px;text-align:center;color:var(--accent-green);">' + c.kazanan + '</td>';
+                html += '<td style="padding:6px 8px;text-align:center;color:var(--accent-red);">' + c.kaybeden + '</td>';
+                html += '<td style="padding:6px 8px;text-align:right;color:' + cPnl + ';font-weight:600;">$' + (c.toplam_pnl || 0).toFixed(2) + '</td>';
+                html += '</tr>';
+            }
+            html += '</tbody></table></div>';
+        }
+
+        div.innerHTML = html;
+    } catch(e) {
+        div.innerHTML = '<div style="color:var(--accent-red);padding:20px;text-align:center;">Ozet yuklenemedi: ' + e.message + '</div>';
+    }
+}
+
+async function resetStats() {
+    if (!confirm('Tum islem gecmisi ve istatistikler sifirlanacak. Emin misiniz?')) return;
+    try {
+        await fetch('/api/live/reset-stats', {method: 'POST'});
+        loadSummary();
+    } catch(e) {
+        alert('Sifirlama basarisiz: ' + e.message);
+    }
+}
+
+// ============================
+// TABS
+// ============================
+function switchTab(name) {
+    document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+
+    const tabId = 'tab' + name.charAt(0).toUpperCase() + name.slice(1);
+    const tabEl = document.getElementById(tabId);
+    if (tabEl) tabEl.style.display = 'block';
+    if (event && event.target) {
+        event.target.classList.add('active');
+    } else {
+        const tabMap = {scalp: 0, news: 1, ozet: 2, islem: 3, settings: 4};
+        const idx = tabMap[name];
+        if (idx !== undefined) {
+            document.querySelectorAll('.tab')[idx].classList.add('active');
+        }
+    }
+
+    if (name === 'news') loadNews();
+    if (name === 'scalp') loadScalpRadar();
+    if (name === 'islem') refreshIslem();
+    if (name === 'settings') loadSettings();
+    if (name === 'ozet') loadSummary();
+}
+
+function setScalpTf(tf, btn) {
+    scalpTf = tf;
+    document.querySelectorAll('#tabScalp .tf-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderScalpFromCoins(allCoins);
+}
+
+// ============================
+// REFRESH ALL
+// ============================
+async function refreshAll() {
+    const dot = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    dot.className = 'status-dot';
+    dot.style.background = 'var(--accent-yellow)';
+    text.textContent = 'Güncelleniyor...';
+
+    await loadMarketOverview();
+
+    const data = await fetchAPI('/api/market/all?timeframe=' + scalpTf);
+    if (data && Array.isArray(data.sonuclar)) {
+        allCoins = data.sonuclar;
+    }
+    renderScalpFromCoins(allCoins);
+
+    dot.className = 'status-dot active';
+    text.textContent = 'Sistem Aktif';
+}
+
+// ============================
+// SETTINGS
+// ============================
+async function loadSettings() {
+    try {
+        const data = await fetchAPI('/api/paper/settings');
+        if (!data) {
+            data = {islem_basi_dolar:50,kaldirac:1,coin_adedi:100,min_fiyat:0.01,trailing_stop_yuzde:3.0,sabit_stop_yuzde:2.0,kismi_satis_yuzde:25,kismi_satis_kar_hedefi:1.0,max_pozisyon:20,min_guven:30,min_sinyal_puani:2,soguma_dakika:60,tarama_tfleri:['1m','3m','5m','15m'],kara_liste:[]};
+        }
+        const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+        set('setIslemBasi', data.islem_basi_dolar);
+        set('setKaldirac', data.kaldirac);
+        set('setCoinAdedi', data.coin_adedi);
+        set('setMinPrice', data.min_fiyat);
+        set('setTrailingStop', data.trailing_stop_yuzde);
+        set('setSabitStop', data.sabit_stop_yuzde);
+        set('setKisKarHedef', data.kismi_satis_kar_hedefi);
+        set('setKisSatYuzde', data.kismi_satis_yuzde);
+        set('setMaxPos', data.max_pozisyon);
+        set('setMinGuven', data.min_guven);
+        set('setMinSP', data.min_sinyal_puani);
+        set('setSoguma', data.soguma_dakika);
+        set('setKaraListe', (data.kara_liste || []).join(', '));
+        document.querySelectorAll('.tfCheck').forEach(cb => {
+            cb.checked = data.tarama_tfleri && data.tarama_tfleri.includes(cb.value);
+        });
+    } catch(e) { console.error('Settings load error:', e); }
+}
+
+// ===== ISLEM FONKSIYONLARI =====
+
+async function switchActiveMode(mode) {
+    try {
+        const res = await fetch(API_BASE + '/api/live/mode', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mode: mode})
+        });
+        const data = await res.json();
+        if (data.error) { alert(data.error); return; }
+        updateModeButtons(mode);
+        refreshIslem();
+    } catch(e) { alert('Hata: ' + e.message); }
+}
+
+function updateModeButtons(mode) {
+    const btnTest = document.getElementById('btnModeTest');
+    const btnLive = document.getElementById('btnModeLive');
+    if (mode === 'test') {
+        btnTest.style.background = '#2196f3'; btnTest.style.borderColor = '#2196f3'; btnTest.style.color = 'white';
+        btnLive.style.background = 'transparent'; btnLive.style.borderColor = '#666'; btnLive.style.color = 'var(--text-muted)';
+    } else {
+        btnLive.style.background = '#f44336'; btnLive.style.borderColor = '#f44336'; btnLive.style.color = 'white';
+        btnTest.style.background = 'transparent'; btnTest.style.borderColor = '#666'; btnTest.style.color = 'var(--text-muted)';
+    }
+}
+
+async function startLive() {
+    try {
+        const res = await fetch(API_BASE + '/api/live/start', {method: 'POST'});
+        const data = await res.json();
+        document.getElementById('islemStatus').innerHTML = '<span style="color:' + (data.hata ? '#f44336' : '#4caf50') + ';">' + (data.mesaj || data.hata) + '</span>';
+        refreshIslem();
+    } catch(e) { document.getElementById('islemStatus').innerHTML = '<span style="color:#f44336;">Hata: ' + e.message + '</span>'; }
+}
+
+async function stopLive() {
+    try {
+        const res = await fetch(API_BASE + '/api/live/stop', {method: 'POST'});
+        const data = await res.json();
+        document.getElementById('islemStatus').innerHTML = '<span style="color:#ff9800;">' + (data.mesaj || data.hata) + '</span>';
+        refreshIslem();
+    } catch(e) { document.getElementById('islemStatus').innerHTML = '<span style="color:#f44336;">Hata: ' + e.message + '</span>'; }
+}
+
+async function waitLive() {
+    try {
+        const res = await fetch(API_BASE + '/api/live/wait', {method: 'POST'});
+        const data = await res.json();
+        document.getElementById('islemStatus').innerHTML = '<span style="color:#ff9800;">' + (data.mesaj || data.hata) + '</span>';
+        refreshIslem();
+    } catch(e) { document.getElementById('islemStatus').innerHTML = '<span style="color:#f44336;">Hata: ' + e.message + '</span>'; }
+}
+
+async function closeAllLive() {
+    if (!confirm('Tum acik pozisyonlar anlik fiyattan kapatilacak. Emin misin?')) return;
+    try {
+        const res = await fetch(API_BASE + '/api/live/close-all', {method: 'POST'});
+        const data = await res.json();
+        document.getElementById('islemStatus').innerHTML = '<span style="color:' + (data.hata?'#f44336':'#4caf50') + ';">' + (data.mesaj || data.hata) + '</span>';
+        refreshIslem();
+    } catch(e) { document.getElementById('islemStatus').innerHTML = '<span style="color:#f44336;">Hata: ' + e.message + '</span>'; }
+}
+
+async function refreshIslem() {
+    try {
+        const res = await fetch(API_BASE + '/api/live/state');
+        const data = await res.json();
+        const balCard = document.getElementById('islemBalanceCard');
+        const pnlCard = document.getElementById('islemPnlCard');
+        const posDiv = document.getElementById('islemPositions');
+        const histDiv = document.getElementById('islemHistory');
+        const statusDiv = document.getElementById('islemStatus');
+        const modeInfo = document.getElementById('activeModeInfo');
+
+        const mode = data.active_mode || 'test';
+        updateModeButtons(mode);
+
+        if (data.api_key_set) {
+            var modeLabel = mode === 'test' ? 'TESTNET' : 'GERCEK';
+            var modeColor = mode === 'test' ? '#2196f3' : '#f44336';
+            var durumColor = data.durum === 'aktif' ? '#4caf50' : data.durum === 'bekle' ? '#ff9800' : '#607d8b';
+            var durumText = data.durum === 'aktif' ? 'AKTIF' : data.durum === 'bekle' ? 'BEKLEMEDE' : 'DURDU';
+            statusDiv.innerHTML = '<span style="color:' + modeColor + ';font-weight:600;">[' + modeLabel + ']</span> Durum: <span style="color:' + durumColor + ';">' + durumText + '</span>';
+            modeInfo.innerHTML = 'Aktif mod: <b style="color:' + modeColor + ';">' + modeLabel + '</b> | API tanimli';
+        } else {
+            statusDiv.innerHTML = '<span style="color:#ff9800;">API key tanimli degil - binance_config.json dosyasini duzenle</span>';
+            modeInfo.innerHTML = '<span style="color:#ff9800;">' + mode + ' icin API key gerekli (binance_config.json)</span>';
+        }
+
+        balCard.innerHTML = '<div class="label">Bakiye</div><div class="value">$' + (data.toplam_bakiye||0).toFixed(2) + '</div><div class="subtext">Kilitli: $' + (data.kilitli_teminat||0).toFixed(2) + ' | Kullanilabilir: $' + ((data.toplam_bakiye||0)-(data.kilitli_teminat||0)).toFixed(2) + '</div>';
+        pnlCard.innerHTML = '<div class="label">Acik Kar/Zarar</div><div class="value" style="color:' + ((data.acik_kar_zarar||0)>=0?'#4caf50':'#f44336') + ';">$' + (data.acik_kar_zarar||0).toFixed(2) + '</div><div class="subtext">Islem: ' + (data.toplam_islem||0) + ' | Kazanma: %' + (data.kazanma_orani||0).toFixed(1) + '</div>';
+        var kapaliCard = document.getElementById('islemKapaliCard');
+        if (kapaliCard) {
+            var kapaliKz = data.toplam_kapali_kar || 0;
+            kapaliCard.innerHTML = '<div class="label">Kapanan Islemler K/Z</div><div class="value" style="color:' + (kapaliKz>=0?'#4caf50':'#f44336') + ';">$' + kapaliKz.toFixed(2) + '</div><div class="subtext">Toplam kapali kar/zarar</div>';
+        }
+
+        if (data.acik_pozisyonlar && data.acik_pozisyonlar.length > 0) {
+            posDiv.innerHTML = data.acik_pozisyonlar.map(function(p) {
+                var yonColor = p.yon === 'LONG' ? '#4caf50' : '#f44336';
+                var kzColor = (p.acik_kz||0) >= 0 ? '#4caf50' : '#f44336';
+                var kzYuzde = p.acik_kz_yuzde || 0;
+                var kzYuzdeColor = kzYuzde >= 0 ? '#4caf50' : '#f44336';
+                var sureText = p.sure_dk >= 60 ? (p.sure_dk/60).toFixed(1)+'s' : p.sure_dk+'dk';
+                var girisTarih = p.entry_time ? new Date(p.entry_time).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '-';
+                var trStop = p.trailing_stop ? p.trailing_stop.toFixed(6) : '-';
+                var slFiyat = p.initial_sl ? p.initial_sl.toFixed(6) : '-';
+                var tsIcon = p.kismi_satis ? '<span style="color:#ff9800;font-size:10px;margin-left:4px;">KISMİ</span>' : '';
+
+                return '<div style="padding:12px;background:var(--bg-secondary);border-radius:8px;margin-bottom:8px;border-left:3px solid '+yonColor+';">' +
+                    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+                        '<div><span style="color:var(--text-primary);font-weight:700;font-size:14px;">' + p.display_symbol + '</span>' +
+                        '<span style="color:'+yonColor+';font-size:12px;font-weight:600;margin-left:8px;padding:2px 8px;background:'+yonColor+'22;border-radius:4px;">' + p.yon + '</span>' +
+                        '<span style="font-size:11px;color:var(--text-muted);margin-left:6px;">x' + p.kaldirac + '</span>' + tsIcon + '</div>' +
+                        '<div style="text-align:right;"><span style="color:'+kzColor+';font-weight:700;font-size:14px;">$' + p.acik_kz.toFixed(2) + '</span> ' +
+                        '<span style="color:'+kzYuzdeColor+';font-size:11px;">(' + (kzYuzde>=0?'+':'')+kzYuzde.toFixed(2) + '%)</span></div>' +
+                    '</div>' +
+                    '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;font-size:11px;color:var(--text-muted);">' +
+                        '<div>Giris: <b style="color:var(--text-primary);">$' + p.giris_fiyati.toFixed(4) + '</b></div>' +
+                        '<div>Anlik: <b style="color:var(--text-primary);">$' + p.mark_fiyati.toFixed(4) + '</b></div>' +
+                        '<div>Trailing: <b style="color:#ff9800;">$' + trStop + '</b></div>' +
+                        '<div>SL: <b style="color:#f44336;">$' + slFiyat + '</b></div>' +
+                        '<div>TF: <b style="color:var(--text-primary);">' + p.timeframe + '</b></div>' +
+                        '<div>Sure: <b style="color:var(--text-primary);">' + sureText + '</b></div>' +
+                        '<div>Teminat: <b style="color:var(--text-primary);">$' + p.teminat.toFixed(2) + '</b></div>' +
+                        '<div>Guven: <b style="color:var(--text-primary);">' + p.guven + '</b></div>' +
+                        '<div style="grid-column:span 2;">Giris Tarihi: <b style="color:var(--text-primary);">' + girisTarih + '</b></div>' +
+                    '</div>' +
+                    '<div style="margin-top:8px;text-align:right;">' +
+                        '<button onclick="closePosition(\'' + p.symbol + '\', \'' + p.yon + '\')" style="padding:5px 14px;background:#f44336;color:white;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;">Kapat</button>' +
+                    '</div>' +
+                '</div>';
+            }).join('');
+        } else {
+            posDiv.innerHTML = '<span style="color:var(--text-muted);">Acik pozisyon yok</span>';
+        }
+
+        if (data.trade_history && data.trade_history.length > 0) {
+            var rows = data.trade_history.filter(function(t) { return t.reason !== 'ACILIS'; }).slice(-50).reverse();
+            var histHtml = '<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">' +
+                '<thead><tr style="border-bottom:2px solid var(--border-color);text-align:left;">' +
+                '<th style="padding:6px 4px;color:var(--text-muted);">Coin</th>' +
+                '<th style="padding:6px 4px;color:var(--text-muted);">Yon</th>' +
+                '<th style="padding:6px 4px;color:var(--text-muted);">TF</th>' +
+                '<th style="padding:6px 4px;color:var(--text-muted);">Giris</th>' +
+                '<th style="padding:6px 4px;color:var(--text-muted);">Kapanis</th>' +
+                '<th style="padding:6px 4px;color:var(--text-muted);">K/Z</th>' +
+                '<th style="padding:6px 4px;color:var(--text-muted);">Sure</th>' +
+                '<th style="padding:6px 4px;color:var(--text-muted);">Sebep</th>' +
+                '<th style="padding:6px 4px;color:var(--text-muted);">Tarih</th>' +
+                '</tr></thead><tbody>';
+            rows.forEach(function(t) {
+                var yonColor = (t.direction||t.yon||'') === 'LONG' ? '#4caf50' : '#f44336';
+                var pnl = t.pnl || 0;
+                var pnlColor = pnl >= 0 ? '#4caf50' : '#f44336';
+                var kapanis = t.close_price ? '$' + t.close_price.toFixed(4) : '-';
+                var giris = t.entry_price ? '$' + t.entry_price.toFixed(4) : '-';
+                var sure = t.sure_dk ? (t.sure_dk >= 60 ? (t.sure_dk/60).toFixed(1)+'s' : t.sure_dk+'dk') : '-';
+                var sebep = t.reason || '-';
+                var tarih = t.close_time ? new Date(t.close_time).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : (t.time ? new Date(t.time).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '-');
+                histHtml += '<tr style="border-bottom:1px solid var(--border-color);">' +
+                    '<td style="padding:5px 4px;font-weight:600;">' + (t.symbol||'') + '</td>' +
+                    '<td style="padding:5px 4px;color:' + yonColor + ';font-weight:600;">' + (t.direction||t.yon||'') + '</td>' +
+                    '<td style="padding:5px 4px;">' + (t.timeframe||'-') + '</td>' +
+                    '<td style="padding:5px 4px;">' + giris + '</td>' +
+                    '<td style="padding:5px 4px;">' + kapanis + '</td>' +
+                    '<td style="padding:5px 4px;color:' + pnlColor + ';font-weight:600;">$' + pnl.toFixed(2) + '</td>' +
+                    '<td style="padding:5px 4px;">' + sure + '</td>' +
+                    '<td style="padding:5px 4px;"><span style="padding:2px 6px;background:' + (sebep==='KISMI_SATIS'?'#ff9800':sebep==='TRAILING_STOP'?'#9c27b0':sebep==='BINANCE_SL'?'#e91e63':'#607d8b') + '22;color:' + (sebep==='KISMI_SATIS'?'#ff9800':sebep==='TRAILING_STOP'?'#9c27b0':sebep==='BINANCE_SL'?'#e91e63':'#607d8b') + ';border-radius:3px;font-size:10px;">' + sebep + '</span></td>' +
+                    '<td style="padding:5px 4px;color:var(--text-muted);">' + tarih + '</td>' +
+                    '</tr>';
+            });
+            histHtml += '</tbody></table></div>';
+            histDiv.innerHTML = histHtml;
+        } else {
+            histDiv.innerHTML = '<span style="color:var(--text-muted);">Islem gecmisi yok</span>';
+        }
+    } catch(e) {
+        document.getElementById('islemStatus').innerHTML = '<span style="color:#f44336;">Baglanti hatasi</span>';
+    }
+}
+
+async function closePosition(symbol, yon) {
+    try {
+        const res = await fetch(API_BASE + '/api/live/close', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({symbol: symbol, yon: yon})
+        });
+        const data = await res.json();
+        document.getElementById('islemStatus').innerHTML = '<span style="color:' + (data.error?'#f44336':'#4caf50') + ';">' + (data.mesaj || data.error || data.hata) + '</span>';
+        refreshIslem();
+    } catch(e) { document.getElementById('islemStatus').innerHTML = '<span style="color:#f44336;">Hata: ' + e.message + '</span>'; }
+}
+
+async function clearHistory() {
+    if (!confirm('Islem gecmisi ve sayaclar silinecek. Emin misin?')) return;
+    try {
+        const res = await fetch(API_BASE + '/api/live/clear-history', {method: 'POST'});
+        const data = await res.json();
+        refreshIslem();
+    } catch(e) {}
+}
+
+// ===== AYARLAR =====
+
+async function saveSettings() {
+    const tfs = [];
+    document.querySelectorAll('.tfCheck:checked').forEach(cb => tfs.push(cb.value));
+    const klRaw = document.getElementById('setKaraListe').value;
+    const karaListe = klRaw.split(',').map(s => s.trim().toUpperCase()).filter(s => s.length > 0);
+    const settings = {
+        islem_basi_dolar: parseFloat(document.getElementById('setIslemBasi').value) || 50,
+        kaldirac: parseInt(document.getElementById('setKaldirac').value) || 1,
+        coin_adedi: parseInt(document.getElementById('setCoinAdedi').value) || 100,
+        min_fiyat: parseFloat(document.getElementById('setMinPrice').value) || 0.01,
+        trailing_stop_yuzde: parseFloat(document.getElementById('setTrailingStop').value) || 3.0,
+        sabit_stop_yuzde: parseFloat(document.getElementById('setSabitStop').value) || 2.0,
+        kismi_satis_kar_hedefi: parseFloat(document.getElementById('setKisKarHedef').value) || 1.0,
+        kismi_satis_yuzde: parseInt(document.getElementById('setKisSatYuzde').value) || 25,
+        max_pozisyon: parseInt(document.getElementById('setMaxPos').value) || 20,
+        min_guven: parseInt(document.getElementById('setMinGuven').value) || 30,
+        min_sinyal_puani: parseInt(document.getElementById('setMinSP').value) || 2,
+        soguma_dakika: parseInt(document.getElementById('setSoguma').value) || 60,
+        tarama_tfleri: tfs,
+        kara_liste: karaListe
+    };
+    try {
+        await fetchAPI('/api/paper/settings', {method: 'POST', body: JSON.stringify(settings)});
+        const msg = document.getElementById('settingsMsg');
+        msg.style.display = 'block';
+        msg.textContent = 'Ayarlar kaydedildi!';
+        setTimeout(() => { msg.style.display = 'none'; }, 3000);
+    } catch(e) { console.error('Settings save error:', e); }
+}
+
+// ============================
+// INIT
+// ============================
+document.addEventListener('DOMContentLoaded', () => {
+    loadMarketOverview();
+    loadNews();
+    refreshAll();
+
+    setInterval(refreshAll, 15000);
+});
+</script>
+
+</body>
+</html>

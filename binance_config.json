@@ -1,0 +1,11 @@
+{
+  "active_mode": "test",
+  "testnet": {
+    "api_key": "VTMSFjFOKnGpoBs7zz3O5NpmiUM3n8LGH3ADV9uwicA4hVi3OF7mQCNrGLdleAxY",
+    "api_secret": "bzREbQnPmZz8yMaBKuczANhA3p3Rs3EdI3ZL3dHsdVp4mgRiTUkWzdQV5KXS9CtR"
+  },
+  "live": {
+    "api_key": "ytJWoxa6okmXubS8d5VSvF9OmjNhoOPcpM1kz7L5n9w81HwtnmZWqZIz6gAWS71I",
+    "api_secret": "tab72dr6uVjP99qP8jVP8oTqcEg9403V3fMpQu6cynvvVLshewaQ1EbQHshh3nac"
+  }
+}

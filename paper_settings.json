@@ -1,0 +1,20 @@
+{
+  "islem_basi_dolar": 10,
+  "kaldirac": 5,
+  "min_fiyat": 0.01,
+  "trailing_stop_yuzde": 3,
+  "max_pozisyon": 30,
+  "min_guven": 80,
+  "min_sinyal_puani": 4,
+  "tarama_tfleri": [
+    "1m",
+    "3m",
+    "5m",
+    "15m"
+  ],
+  "max_islem_suresi_saat": 0,
+  "kara_liste": [],
+  "soguma_dakika": 60,
+  "coin_adedi": 140,
+  "gercek_veri_modu": true
+}

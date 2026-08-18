@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+error.log
+output.log
+trader_state_test.json
+.env
+venv/
+.venv/
+APİ.txt
