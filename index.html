@@ -896,11 +896,11 @@ async function refreshIslem() {
         }
 
         balCard.innerHTML = '<div class="label">Bakiye</div><div class="value">$' + (data.toplam_bakiye||0).toFixed(2) + '</div><div class="subtext">Kilitli: $' + (data.kilitli_teminat||0).toFixed(2) + ' | Kullanilabilir: $' + ((data.toplam_bakiye||0)-(data.kilitli_teminat||0)).toFixed(2) + '</div>';
-        pnlCard.innerHTML = '<div class="label">Acik Kar/Zarar</div><div class="value" style="color:' + ((data.acik_kar_zarar||0)>=0?'#4caf50':'#f44336') + ';">$' + (data.acik_kar_zarar||0).toFixed(2) + '</div><div class="subtext">Islem: ' + (data.toplam_islem||0) + ' | Kazanma: %' + (data.kazanma_orani||0).toFixed(1) + '</div>';
+        pnlCard.innerHTML = '<div class="label">Acik Kar/Zarar</div><div class="value" style="color:' + ((data.acik_kar_zarar||0)>=0?'#4caf50':'#f44336') + ';">$' + (data.acik_kar_zarar||0).toFixed(2) + '</div><div class="subtext">Pozisyon: ' + (data.acik_pozisyon_sayisi||0) + ' | Kazanma: %' + (data.kazanma_orani||0).toFixed(1) + '</div>';
         var kapaliCard = document.getElementById('islemKapaliCard');
         if (kapaliCard) {
             var kapaliKz = data.toplam_kapali_kar || 0;
-            kapaliCard.innerHTML = '<div class="label">Kapanan Islemler K/Z</div><div class="value" style="color:' + (kapaliKz>=0?'#4caf50':'#f44336') + ';">$' + kapaliKz.toFixed(2) + '</div><div class="subtext">Toplam kapali kar/zarar</div>';
+            kapaliCard.innerHTML = '<div class="label">Kapanan Islemler K/Z</div><div class="value" style="color:' + (kapaliKz>=0?'#4caf50':'#f44336') + ';">$' + kapaliKz.toFixed(2) + '</div><div class="subtext">Islem: ' + (data.kapanan_islem_sayisi||0) + ' | Kazanma: %' + (data.kazanma_orani||0).toFixed(1) + '</div>';
         }
 
         if (data.acik_pozisyonlar && data.acik_pozisyonlar.length > 0) {

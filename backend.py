@@ -882,6 +882,28 @@ class PaperTrader:
         if trailing <= 0:
             return
 
+        entry = pos['entry_price']
+        leverage = pos.get('leverage', 1)
+
+        if not pos.get('kismi_satis'):
+            kar_hedefi = (PAPER_SETTINGS.get('kismi_satis_kar_hedefi') or 1.0) / 100
+            kismi_yuzde = PAPER_SETTINGS.get('kismi_satis_yuzde') or 25
+            if direction == 'LONG':
+                kar_orani = (price - entry) / entry * leverage
+            else:
+                kar_orani = (entry - price) / entry * leverage
+            if kar_orani >= kar_hedefi:
+                self._partial_close(symbol, kismi_yuzde, 'KISMI_SATIS', price)
+                if symbol in self.positions:
+                    pos = self.positions[symbol]
+                    pos['kismi_satis'] = True
+                    if direction == 'LONG':
+                        pos['trailing_stop'] = entry
+                    else:
+                        pos['trailing_stop'] = entry
+                    logger.info('Kismi satis yapildi: %s, stop girise cekildi: %.6f', symbol, entry)
+                return
+
         if direction == 'LONG':
             if price <= trailing:
                 self._close_position(symbol, trailing, 'TRAILING_STOP')
@@ -985,7 +1007,8 @@ class PaperTrader:
             'pnl': None,
             'pnl_percent': None,
             'reason': None,
-            'toplam_komisyon': round(komisyon, 4)
+            'toplam_komisyon': round(komisyon, 4),
+            'kismi_satis': False
         }
 
     def _close_position(self, symbol, close_price, reason):
@@ -1053,6 +1076,7 @@ class PaperTrader:
             'ozsermaye': total_equity,
             'acik_pozisyon_sayisi': len(self.positions),
             'toplam_islem': self.total_trades,
+            'kapanan_islem_sayisi': len(self.trade_history),
             'kazanan': self.winning_trades,
             'kaybeden': self.losing_trades,
             'kazanma_orani': round(win_rate, 1),
@@ -1628,6 +1652,7 @@ class BinanceLiveTrader:
             'kilitli_teminat': round(total_margin, 2),
             'acik_pozisyon_sayisi': len(positions) if isinstance(positions, list) else 0,
             'toplam_islem': self.total_trades,
+            'kapanan_islem_sayisi': len(self.trade_history),
             'kazanan': self.winning_trades,
             'kaybeden': self.losing_trades,
             'kazanma_orani': round(win_rate, 1),
@@ -1821,6 +1846,28 @@ class BinanceLiveTrader:
             if sl_result and 'error' not in sl_result:
                 self.local_positions[symbol]['sl_order_id'] = sl_result.get('algoId') or sl_result.get('orderId')
             return
+
+        if not local.get('kismi_satis'):
+            kar_hedefi = (PAPER_SETTINGS.get('kismi_satis_kar_hedefi') or 1.0) / 100
+            kismi_yuzde = PAPER_SETTINGS.get('kismi_satis_yuzde') or 25
+            entry = pos['giris_fiyati']
+            if direction == 'LONG':
+                kar_orani = (binance_mark - entry) / entry * leverage
+            else:
+                kar_orani = (entry - binance_mark) / entry * leverage
+            if kar_orani >= kar_hedefi:
+                self._cancel_binance_sl(symbol)
+                result = self._partial_close_live(symbol, kismi_yuzde, direction, binance_mark)
+                if result and 'error' not in result:
+                    self.local_positions[symbol]['kismi_satis'] = True
+                    self.local_positions[symbol]['trailing_stop'] = entry
+                    sl_result = self._place_binance_sl(symbol, direction, entry, leverage)
+                    if sl_result and 'error' not in sl_result:
+                        self.local_positions[symbol]['sl_order_id'] = sl_result.get('algoId') or sl_result.get('orderId')
+                    logger.info('Kismi satis yapildi: %s, stop girise cekildi: %.6f', symbol, entry)
+                else:
+                    logger.warning('Kismi satis basarisiz: %s %s', symbol, result)
+                return
 
         if direction == 'LONG':
             if binance_mark <= trailing:
@@ -2029,6 +2076,7 @@ class BinanceLiveTrader:
             'base_dolar': base_dolar,
             'v2': True,
             'sl_order_id': None,
+            'kismi_satis': False,
         }
         sl_result = self._place_binance_sl(binance_sym, yon, initial_trailing, leverage)
         if sl_result and 'error' not in sl_result:
@@ -2046,6 +2094,8 @@ DEFAULT_PAPER_SETTINGS = {
     'kaldirac': 5,
     'min_fiyat': 0.01,
     'trailing_stop_yuzde': 3.0,
+    'kismi_satis_kar_hedefi': 1.0,
+    'kismi_satis_yuzde': 25,
     'max_pozisyon': 5,
     'min_guven': 70,
     'min_sinyal_puani': 3,
