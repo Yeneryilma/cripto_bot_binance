@@ -867,13 +867,12 @@ class PaperTrader:
             self.equity_curve = self.equity_curve[-500:]
 
     def _position_pnl(self, pos, current_price):
-        leverage = pos.get('leverage', 1)
         entry = pos['entry_price']
-        pos_value = pos.get('position_value', entry * pos['quantity'])
+        quantity = pos.get('quantity', 0)
         if pos['direction'] == 'LONG':
-            return (current_price - entry) / entry * leverage * pos_value
+            return (current_price - entry) * quantity
         else:
-            return (entry - current_price) / entry * leverage * pos_value
+            return (entry - current_price) * quantity
 
     def _check_position(self, symbol, pos, price):
         direction = pos['direction']
@@ -930,9 +929,9 @@ class PaperTrader:
         satilan_teminat = satilan_notional / leverage
         komisyon = satilan_notional * self.KOMISYON_ORANI
         if current_price and pos['direction'] == 'LONG':
-            pnl = (current_price - entry) / entry * leverage * satilan_notional
+            pnl = (current_price - entry) * satilan_miktar
         elif current_price and pos['direction'] == 'SHORT':
-            pnl = (entry - current_price) / entry * leverage * satilan_notional
+            pnl = (entry - current_price) * satilan_miktar
         else:
             pnl = 0
         pnl -= komisyon
@@ -947,8 +946,7 @@ class PaperTrader:
             self.winning_trades += 1
         else:
             self.losing_trades += 1
-        base_dolar = satilan_notional / leverage if leverage > 0 else satilan_notional
-        pnl_percent = (pnl / base_dolar * 100) if base_dolar > 0 else 0
+        pnl_percent = (pnl / satilan_teminat * 100) if satilan_teminat > 0 else 0
         self.trade_history.append({
             'symbol': symbol,
             'direction': pos['direction'],
@@ -1022,7 +1020,7 @@ class PaperTrader:
         komisyon = pos_value * self.KOMISYON_ORANI
         pnl -= komisyon
         toplam_komisyon = pos.get('toplam_komisyon', 0) + komisyon
-        pnl_percent = (pnl / pos_value * 100) if pos_value > 0 else 0
+        pnl_percent = (pnl / teminat * 100) if teminat > 0 else 0
         self.locked_margin -= teminat
         self.balance += teminat + pnl
         self.total_trades += 1
