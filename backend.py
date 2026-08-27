@@ -888,9 +888,9 @@ class PaperTrader:
             kar_hedefi = (PAPER_SETTINGS.get('kismi_satis_kar_hedefi') or 1.0) / 100
             kismi_yuzde = PAPER_SETTINGS.get('kismi_satis_yuzde') or 25
             if direction == 'LONG':
-                kar_orani = (price - entry) / entry * leverage
+                kar_orani = (price - entry) / entry
             else:
-                kar_orani = (entry - price) / entry * leverage
+                kar_orani = (entry - price) / entry
             if kar_orani >= kar_hedefi:
                 self._partial_close(symbol, kismi_yuzde, 'KISMI_SATIS', price)
                 if symbol in self.positions:
@@ -1850,9 +1850,9 @@ class BinanceLiveTrader:
             kismi_yuzde = PAPER_SETTINGS.get('kismi_satis_yuzde') or 25
             entry = pos['giris_fiyati']
             if direction == 'LONG':
-                kar_orani = (binance_mark - entry) / entry * leverage
+                kar_orani = (binance_mark - entry) / entry
             else:
-                kar_orani = (entry - binance_mark) / entry * leverage
+                kar_orani = (entry - binance_mark) / entry
             if kar_orani >= kar_hedefi:
                 self._cancel_binance_sl(symbol)
                 result = self._partial_close_live(symbol, kismi_yuzde, direction, binance_mark)
