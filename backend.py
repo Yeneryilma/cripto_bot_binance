@@ -1955,11 +1955,26 @@ class BinanceLiveTrader:
         else:
             realized_pnl = (entry - fill_price) * qty
         self.total_trades += 1
+        local = self.local_positions.get(symbol, {})
+        entry_time = local.get('entry_time', '')
+        close_time = datetime.now().isoformat()
+        sure_dk = 0
+        if entry_time:
+            try:
+                sure_dk = round((datetime.now() - datetime.fromisoformat(entry_time)).total_seconds() / 60, 1)
+            except:
+                pass
         self.trade_history.append({
             'symbol': symbol, 'direction': direction,
             'entry_price': entry, 'close_price': fill_price,
             'pnl': round(realized_pnl, 4),
-            'reason': 'KISMI_SATIS', 'time': datetime.now().isoformat()
+            'pnl_yuzde': round(realized_pnl / (entry * qty) * 100, 2) if entry > 0 and qty > 0 else 0,
+            'timeframe': local.get('timeframe', '?'),
+            'leverage': local.get('leverage', 1),
+            'reason': 'KISMI_SATIS',
+            'entry_time': entry_time,
+            'close_time': close_time,
+            'sure_dk': sure_dk,
         })
         sl_result = self._place_binance_sl(binance_sym, direction, entry, pos.get('kaldirac', 1))
         if sl_result and 'error' not in sl_result:
