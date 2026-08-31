@@ -48,6 +48,28 @@ CORS(app)
 # ============================================================
 
 BINANCE_FUTURES_TESTNET = 'https://testnet.binancefuture.com'
+BINANCE_FUTURES_LIVE = 'https://fapi.binance.com'
+
+_MARKET_DATA_URL_CACHE = None
+_MARKET_DATA_URL_TIME = 0
+
+def _get_market_data_url():
+    global _MARKET_DATA_URL_CACHE, _MARKET_DATA_URL_TIME
+    now = time.time()
+    if _MARKET_DATA_URL_CACHE and (now - _MARKET_DATA_URL_TIME) < 60:
+        return _MARKET_DATA_URL_CACHE
+    try:
+        cfg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'binance_config.json')
+        with open(cfg_path, 'r') as f:
+            cfg = json.load(f)
+        if cfg.get('active_mode') == 'live':
+            _MARKET_DATA_URL_CACHE = BINANCE_FUTURES_LIVE
+        else:
+            _MARKET_DATA_URL_CACHE = BINANCE_FUTURES_TESTNET
+    except:
+        _MARKET_DATA_URL_CACHE = BINANCE_FUTURES_TESTNET
+    _MARKET_DATA_URL_TIME = now
+    return _MARKET_DATA_URL_CACHE
 
 class Config:
     MAJOR_PAIRS = [
@@ -76,7 +98,7 @@ class Config:
     @staticmethod
     def fetch_top_volume_pairs(limit=300):
         try:
-            url = f'{BINANCE_FUTURES_TESTNET}/fapi/v1/ticker/24hr'
+            url = f'{_get_market_data_url()}/fapi/v1/ticker/24hr'
             resp = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0'}, verify=False)
             tickers = resp.json()
             if not isinstance(tickers, list):
@@ -113,13 +135,14 @@ class LiveDataFetcher:
         self.session.headers.update({'User-Agent': 'Mozilla/5.0'})
         self.session.verify = False
         from requests.adapters import HTTPAdapter
-        adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30, max_retries=2)
+        adapter = HTTPAdapter(pool_connections=30, pool_maxsize=30, max_retries=3)
         self.session.mount('https://', adapter)
         self.session.mount('http://', adapter)
         self._live_prices = {}
         self._live_tickers = {}
         self._last_fetch = 0
         self._fetch_interval = 5
+        self._last_kline_time = 0
         self.news_cache = []
         self.news_cache_time = None
         self.last_error = None
@@ -140,7 +163,7 @@ class LiveDataFetcher:
         prices = {}
         tickers = {}
         try:
-            r = self.session.get(f'{BINANCE_FUTURES_TESTNET}/fapi/v1/ticker/24hr', timeout=15)
+            r = self.session.get(f'{_get_market_data_url()}/fapi/v1/ticker/24hr', timeout=15)
             if r.status_code == 200:
                 data = r.json()
                 if isinstance(data, list):
@@ -217,8 +240,14 @@ class LiveDataFetcher:
         binance_sym = Config.to_binance_symbol(symbol)
         interval = self.TF_KLINE_INTERVAL.get(timeframe, '15m')
 
+        now = time.time()
+        elapsed = now - self._last_kline_time
+        if elapsed < 0.2:
+            time.sleep(0.2 - elapsed)
+        self._last_kline_time = time.time()
+
         try:
-            url = f'{BINANCE_FUTURES_TESTNET}/fapi/v1/klines'
+            url = f'{_get_market_data_url()}/fapi/v1/klines'
             params = {'symbol': binance_sym, 'interval': interval, 'limit': limit}
             r = self.session.get(url, params=params, timeout=10)
             if r.status_code != 200:
@@ -256,7 +285,7 @@ class LiveDataFetcher:
     def get_funding_rate(self, symbol: str) -> Dict:
         binance_sym = Config.to_binance_symbol(symbol)
         try:
-            url = f'{BINANCE_FUTURES_TESTNET}/fapi/v1/premiumIndex'
+            url = f'{_get_market_data_url()}/fapi/v1/premiumIndex'
             params = {'symbol': binance_sym}
             r = self.session.get(url, params=params, timeout=10)
             if r.status_code == 200:
@@ -289,7 +318,7 @@ class LiveDataFetcher:
     def get_open_interest(self, symbol: str) -> Dict:
         binance_sym = Config.to_binance_symbol(symbol)
         try:
-            url = f'{BINANCE_FUTURES_TESTNET}/fapi/v1/openInterest'
+            url = f'{_get_market_data_url()}/fapi/v1/openInterest'
             params = {'symbol': binance_sym}
             r = self.session.get(url, params=params, timeout=10)
             if r.status_code == 200:
@@ -1059,9 +1088,20 @@ class PaperTrader:
             pnl = self._position_pnl(pos, current_price)
             pos_val = pos.get('position_value', 0)
             pnl_percent = (pnl / pos_val * 100) if pos_val > 0 else 0
+            trailing_stop = pos.get('trailing_stop', 0)
+            entry = pos.get('entry_price', 0)
+            quantity = pos.get('quantity', 0)
+            direction = pos.get('direction', 'LONG')
+            trailing_kz = 0
+            if trailing_stop > 0 and entry > 0 and quantity > 0:
+                if direction == 'LONG':
+                    trailing_kz = round((trailing_stop - entry) * quantity, 4)
+                else:
+                    trailing_kz = round((entry - trailing_stop) * quantity, 4)
             pos_data = pos.copy()
             pos_data['current_pnl'] = round(pnl, 2)
             pos_data['current_pnl_percent'] = round(pnl_percent, 2)
+            pos_data['trailing_kz'] = trailing_kz
             positions_with_pnl.append(pos_data)
         
         return {
@@ -1423,12 +1463,8 @@ class BinanceLiveTrader:
                 side = 'LONG' if amt > 0 else 'SHORT'
                 binance_sym = p.get('symbol', '')
                 local = self.local_positions.get(binance_sym, {})
-                pnl_yuzde = 0
-                if entry > 0:
-                    if side == 'LONG':
-                        pnl_yuzde = (mark - entry) / entry * lev * 100
-                    else:
-                        pnl_yuzde = (entry - mark) / entry * lev * 100
+                teminat = notional / lev if lev > 0 else notional
+                pnl_yuzde = (pnl / teminat * 100) if teminat > 0 else 0
                 entry_time = local.get('entry_time', '')
                 sure_dk = 0
                 if entry_time:
@@ -1437,6 +1473,13 @@ class BinanceLiveTrader:
                         sure_dk = round((datetime.now() - entry_dt).total_seconds() / 60, 1)
                     except:
                         pass
+                trailing_stop = local.get('trailing_stop', 0)
+                trailing_kz = 0
+                if trailing_stop > 0 and entry > 0 and amt != 0:
+                    if side == 'LONG':
+                        trailing_kz = round((trailing_stop - entry) * abs(amt), 4)
+                    else:
+                        trailing_kz = round((entry - trailing_stop) * abs(amt), 4)
                 positions.append({
                     'symbol': binance_sym,
                     'display_symbol': binance_sym.replace('USDT', '/USDT'),
@@ -1449,9 +1492,8 @@ class BinanceLiveTrader:
                     'teminat': round(notional / lev, 2),
                     'acik_kz': round(pnl, 4),
                     'acik_kz_yuzde': round(pnl_yuzde, 2),
-                    'stop_loss': float(p.get('stopPrice', 0)),
-                    'take_profit': float(p.get('takeProfitPrice', 0)),
-                    'trailing_stop': local.get('trailing_stop', 0),
+                    'trailing_stop': trailing_stop,
+                    'trailing_kz': trailing_kz,
                     'timeframe': local.get('timeframe', '?'),
                     'entry_time': entry_time,
                     'sure_dk': sure_dk,
@@ -1464,15 +1506,24 @@ class BinanceLiveTrader:
         balance = self.get_balance()
         if 'error' in balance:
             return balance
-        if balance['kullanilabilir'] < base_dolar:
-            return {'error': f'Yetersiz bakiye: ${balance["kullanilabilir"]:.2f}'}
+        if balance['kullanilabilir'] < base_dolar * 0.95:
+            return {'error': f'Yetersiz bakiye: ${balance["kullanilabilir"]:.2f} (gerekli: ${base_dolar:.2f})'}
 
         binance_sym = symbol.replace('/', '')
 
         try:
-            self._api_post('/fapi/v1/leverage', {'symbol': binance_sym, 'leverage': leverage})
-        except:
-            pass
+            lev_result = self._api_post('/fapi/v1/leverage', {'symbol': binance_sym, 'leverage': leverage})
+            if 'error' in lev_result:
+                logger.warning('[LIVE] Kaldirac ayarlanamadi %s: %s', binance_sym, lev_result)
+        except Exception as e:
+            logger.warning('[LIVE] Kaldirac hatasi %s: %s', binance_sym, str(e))
+
+        try:
+            margin_result = self._api_post('/fapi/v1/marginType', {'symbol': binance_sym, 'marginType': 'ISOLATED'})
+            if 'error' in margin_result:
+                logger.warning('[LIVE] Margin ayarlanamadi %s: %s', binance_sym, margin_result)
+        except Exception as e:
+            logger.warning('[LIVE] Margin hatasi %s: %s', binance_sym, str(e))
 
         ticker = self._api_get('/fapi/v1/ticker/price', {'symbol': binance_sym})
         if 'error' in ticker:
@@ -1488,6 +1539,10 @@ class BinanceLiveTrader:
         qty = self._round_step(raw_qty, step_size)
         if qty <= 0:
             return {'error': f'Miktar cok kucuk: {raw_qty}'}
+
+        actual_notional = qty * price
+        if actual_notional < 5:
+            return {'error': f'Notional cok kucuk: ${actual_notional:.2f} (min $5)'}
 
         side = 'BUY' if yon == 'LONG' else 'SELL'
 
@@ -1803,6 +1858,7 @@ class BinanceLiveTrader:
                         best_tf = stf
                 if best_signal is None:
                     continue
+                logger.info('[LIVE] Islem sinyali: %s %s guven=%s tf=%s', symbol, best_signal.get('yon','?'), best_guven, best_tf)
                 self._open_live_position(symbol, best_signal, price, best_tf)
 
 
@@ -2065,10 +2121,14 @@ class BinanceLiveTrader:
 
     def _open_live_position(self, symbol, oneri, price, timeframe='15m'):
         leverage = PAPER_SETTINGS.get('kaldirac', 5)
-        base_dolar = PAPER_SETTINGS.get('islem_basi_dolar', 4)
+        balance = self.get_balance()
+        bakiye = balance.get('kullanilabilir', 0) if isinstance(balance, dict) and 'error' not in balance else 0
+        max_poz = PAPER_SETTINGS.get('max_pozisyon', 5)
+        base_dolar = round(bakiye / max_poz, 2) if max_poz > 0 and bakiye > 0 else PAPER_SETTINGS.get('islem_basi_dolar', 4)
         yon = oneri['yon']
         result = self.open_position(symbol, yon, leverage, base_dolar)
         if 'error' in result:
+            logger.warning('[LIVE] Acilamadi: %s - %s', symbol, result.get('error'))
             return
 
         ts_pct = (PAPER_SETTINGS.get('trailing_stop_yuzde') or 3.0) / 100
@@ -2110,8 +2170,8 @@ DEFAULT_PAPER_SETTINGS = {
     'kismi_satis_kar_hedefi': 1.0,
     'kismi_satis_yuzde': 25,
     'max_pozisyon': 5,
-    'min_guven': 70,
-    'min_sinyal_puani': 3,
+    'min_guven': 40,
+    'min_sinyal_puani': 1,
     'tarama_tfleri': ['1m', '3m', '5m', '15m'],
     'max_islem_suresi_saat': 0,
     'kara_liste': [],
@@ -2156,7 +2216,7 @@ live_trader = BinanceLiveTrader()
 import threading
 _last_scan_time = 0
 _scan_lock = threading.Lock()
-SCAN_MIN_INTERVAL = 12
+SCAN_MIN_INTERVAL = 90
 
 @app.route('/')
 def index():
@@ -2383,10 +2443,6 @@ def set_paper_settings():
         if key in data:
             PAPER_SETTINGS[key] = data[key]
     save_paper_settings(PAPER_SETTINGS)
-    if 'coin_adedi' in data:
-        config.TOP_VOLUME_LOADED = False
-        config.TOP_VOLUME_PAIRS = Config.fetch_top_volume_pairs(PAPER_SETTINGS.get('coin_adedi', 100))
-        config.TOP_VOLUME_LOADED = True
     return jsonify({'durum': 'kaydedildi', 'ayarlar': PAPER_SETTINGS})
 
 @app.route('/api/paper/control', methods=['POST'])
@@ -2606,8 +2662,8 @@ if __name__ == '__main__':
     logger.info('KRIPTO PARA FUTURES PIYASA ANALIZ SISTEMI')
     logger.info('Python {}'.format(os.sys.version))
     logger.info('Coin sayisi: {}'.format(len(config.MAJOR_PAIRS)))
-    logger.info('Veri kaynagi: Binance Futures Testnet API (canli)')
-    logger.info('Testnet URL: {}'.format(BINANCE_FUTURES_TESTNET))
+    market_url = _get_market_data_url()
+    logger.info('Veri kaynagi: {}'.format(market_url))
     logger.info('=' * 60)
     logger.info('Sunucu baslatiliyor: http://localhost:5000')
     app.run(host='0.0.0.0', port=5000, debug=False)

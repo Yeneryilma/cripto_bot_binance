@@ -1,13 +1,14 @@
 {
   "islem_basi_dolar": 10,
-  "kaldirac": 5,
+  "kaldirac": 8,
   "min_fiyat": 0.01,
-  "trailing_stop_yuzde": 3,
-  "max_pozisyon": 30,
-  "min_guven": 80,
-  "min_sinyal_puani": 4,
+  "trailing_stop_yuzde": 0.9,
+  "kismi_satis_kar_hedefi": 0.5,
+  "kismi_satis_yuzde": 50,
+  "max_pozisyon": 1,
+  "min_guven": 70,
+  "min_sinyal_puani": 3,
   "tarama_tfleri": [
-    "1m",
     "3m",
     "5m",
     "15m"
@@ -15,6 +16,6 @@
   "max_islem_suresi_saat": 0,
   "kara_liste": [],
   "soguma_dakika": 60,
-  "coin_adedi": 140,
+  "coin_adedi": 100,
   "gercek_veri_modu": true
 }

@@ -912,7 +912,8 @@ async function refreshIslem() {
                 var sureText = p.sure_dk >= 60 ? (p.sure_dk/60).toFixed(1)+'s' : p.sure_dk+'dk';
                 var girisTarih = p.entry_time ? new Date(p.entry_time).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '-';
                 var trStop = p.trailing_stop ? p.trailing_stop.toFixed(6) : '-';
-                var slFiyat = p.initial_sl ? p.initial_sl.toFixed(6) : '-';
+                var trKz = p.trailing_kz || 0;
+                var trKzColor = trKz >= 0 ? '#4caf50' : '#f44336';
                 var tsIcon = p.kismi_satis ? '<span style="color:#ff9800;font-size:10px;margin-left:4px;">KISMİ</span>' : '';
 
                 return '<div style="padding:12px;background:var(--bg-secondary);border-radius:8px;margin-bottom:8px;border-left:3px solid '+yonColor+';">' +
@@ -927,7 +928,7 @@ async function refreshIslem() {
                         '<div>Giris: <b style="color:var(--text-primary);">$' + p.giris_fiyati.toFixed(4) + '</b></div>' +
                         '<div>Anlik: <b style="color:var(--text-primary);">$' + p.mark_fiyati.toFixed(4) + '</b></div>' +
                         '<div>Trailing: <b style="color:#ff9800;">$' + trStop + '</b></div>' +
-                        '<div>SL: <b style="color:#f44336;">$' + slFiyat + '</b></div>' +
+                        '<div>SL: <b style="color:'+trKzColor+';">$' + trKz.toFixed(2) + '</b></div>' +
                         '<div>TF: <b style="color:var(--text-primary);">' + p.timeframe + '</b></div>' +
                         '<div>Sure: <b style="color:var(--text-primary);">' + sureText + '</b></div>' +
                         '<div>Teminat: <b style="color:var(--text-primary);">$' + p.teminat.toFixed(2) + '</b></div>' +
