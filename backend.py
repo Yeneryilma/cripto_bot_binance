@@ -1624,10 +1624,12 @@ class BinanceLiveTrader:
             return {'error': 'Kapatma basarisiz - fill price alinamadi', 'symbol': symbol, 'order_status': order_status}
 
         entry = pos['giris_fiyati']
+        notional = entry * qty
+        komisyon = notional * self.KOMISYON_ORANI * 2
         if yon == 'LONG':
-            realized_pnl = (fill_price - entry) * qty
+            realized_pnl = (fill_price - entry) * qty - komisyon
         else:
-            realized_pnl = (entry - fill_price) * qty
+            realized_pnl = (entry - fill_price) * qty - komisyon
 
         if realized_pnl > 0:
             self.winning_trades += 1
@@ -2006,10 +2008,12 @@ class BinanceLiveTrader:
             return {'error': 'Kismi satis basarisiz - fill price alinamadi', 'symbol': symbol, 'order_status': order_status}
 
         entry = pos['giris_fiyati']
+        notional = entry * qty
+        komisyon = notional * self.KOMISYON_ORANI * 2
         if direction == 'LONG':
-            realized_pnl = (fill_price - entry) * qty
+            realized_pnl = (fill_price - entry) * qty - komisyon
         else:
-            realized_pnl = (entry - fill_price) * qty
+            realized_pnl = (entry - fill_price) * qty - komisyon
         self.total_trades += 1
         local = self.local_positions.get(symbol, {})
         entry_time = local.get('entry_time', '')
