@@ -1749,6 +1749,15 @@ class BinanceLiveTrader:
                 fill_price = self._get_fill_price(sym, direction, limit=20)
                 if fill_price <= 0:
                     fill_price = entry
+                max_deviation = 1.0
+                if direction == 'LONG':
+                    if fill_price < entry * (1 - max_deviation):
+                        logger.warning('[ORPHAN] Fill price entry cok uzak: %s entry=%.6f fill=%.6f - entry kullaniyor', sym, entry, fill_price)
+                        fill_price = entry
+                else:
+                    if fill_price > entry * (1 + max_deviation):
+                        logger.warning('[ORPHAN] Fill price entry cok uzak: %s entry=%.6f fill=%.6f - entry kullaniyor', sym, entry, fill_price)
+                        fill_price = entry
                 qty = (base_dolar * leverage / entry) if entry > 0 else 0
                 notional = entry * qty
                 komisyon = notional * self.KOMISYON_ORANI * 2
