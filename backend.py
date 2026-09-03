@@ -1416,7 +1416,25 @@ class BinanceLiveTrader:
             if close_after_entry:
                 close_trades = close_after_entry
         close_trades.sort(key=lambda t: t.get('time', 0), reverse=True)
-        return float(close_trades[0].get('price', 0))
+        fill_price = float(close_trades[0].get('price', 0))
+        if fill_price <= 0:
+            return 0
+        try:
+            close_time_ms = close_trades[0].get('time', 0)
+            klines = self._api_get('/fapi/v1/klines', {
+                'symbol': symbol, 'interval': '1m', 'limit': 5,
+                'endTime': close_time_ms
+            })
+            if isinstance(klines, list) and klines:
+                max_high = max(float(k[2]) for k in klines)
+                min_low = min(float(k[3]) for k in klines)
+                if fill_price > max_high * 1.5 or fill_price < min_low * 0.5:
+                    logger.warning('[FILL_PRICE] Anormal fill: %s fill=%.6f klines=[%.6f-%.6f] - klines kullaniyor', symbol, fill_price, min_low, max_high)
+                    last_kline = klines[-1]
+                    return float(last_kline[4])
+        except Exception as e:
+            logger.warning('[FILL_PRICE] Klines dogrulama hatasi: %s - %s', symbol, str(e))
+        return fill_price
 
     def _api_delete(self, endpoint, params=None):
         active = self._get_active_config()
