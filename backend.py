@@ -1654,6 +1654,7 @@ class BinanceLiveTrader:
             'pnl_yuzde': round(realized_pnl / (entry * qty) * 100, 2) if entry > 0 and qty > 0 else 0,
             'timeframe': local.get('timeframe', '?'),
             'leverage': local.get('leverage', 1),
+            'base_dolar': local.get('base_dolar', 0),
             'reason': reason,
             'entry_time': entry_time,
             'close_time': close_time,
@@ -1748,11 +1749,13 @@ class BinanceLiveTrader:
                 fill_price = self._get_fill_price(sym, direction, limit=20)
                 if fill_price <= 0:
                     fill_price = entry
+                qty = (base_dolar * leverage / entry) if entry > 0 else 0
+                notional = entry * qty
+                komisyon = notional * self.KOMISYON_ORANI * 2
                 if direction == 'LONG':
-                    pnl_pct = (fill_price - entry) / entry if entry > 0 else 0
+                    realized_pnl = (fill_price - entry) * qty - komisyon
                 else:
-                    pnl_pct = (entry - fill_price) / entry if entry > 0 else 0
-                realized_pnl = pnl_pct * base_dolar
+                    realized_pnl = (entry - fill_price) * qty - komisyon
                 sure_dk = 0
                 if entry_time:
                     try:
@@ -1764,9 +1767,10 @@ class BinanceLiveTrader:
                     'entry_price': entry,
                     'close_price': fill_price,
                     'pnl': round(realized_pnl, 4),
-                    'pnl_yuzde': round(pnl_pct * 100, 2),
+                    'pnl_yuzde': round(realized_pnl / notional * 100, 2) if notional > 0 else 0,
                     'timeframe': timeframe,
                     'leverage': leverage,
+                    'base_dolar': base_dolar,
                     'reason': 'BINANCE_SL',
                     'entry_time': entry_time,
                     'close_time': datetime.now().isoformat(),
