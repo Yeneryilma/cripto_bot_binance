@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import time
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,10 +44,6 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'crypto-trader-secret-key'
 CORS(app)
 
-# ============================================================
-# BINANCE FUTURES TESTNET YAPILANDIRMA
-# ============================================================
-
 BINANCE_FUTURES_TESTNET = 'https://testnet.binancefuture.com'
 BINANCE_FUTURES_LIVE = 'https://fapi.binance.com'
 
@@ -66,10 +63,11 @@ def _get_market_data_url():
             _MARKET_DATA_URL_CACHE = BINANCE_FUTURES_LIVE
         else:
             _MARKET_DATA_URL_CACHE = BINANCE_FUTURES_TESTNET
-    except:
+    except Exception:
         _MARKET_DATA_URL_CACHE = BINANCE_FUTURES_TESTNET
     _MARKET_DATA_URL_TIME = now
     return _MARKET_DATA_URL_CACHE
+
 
 class Config:
     MAJOR_PAIRS = [
@@ -83,6 +81,7 @@ class Config:
 
     TOP_VOLUME_PAIRS = []
     TOP_VOLUME_LOADED = False
+    TOP_VOLUME_LAST_REFRESH = 0
 
     @staticmethod
     def to_binance_symbol(pair: str) -> str:
@@ -96,7 +95,7 @@ class Config:
         return binance_sym
 
     @staticmethod
-    def fetch_top_volume_pairs(limit=300):
+    def fetch_top_volume_pairs(limit=300, min_volume=0):
         try:
             url = f'{_get_market_data_url()}/fapi/v1/ticker/24hr'
             resp = requests.get(url, timeout=15, headers={'User-Agent': 'Mozilla/5.0'}, verify=False)
@@ -104,25 +103,31 @@ class Config:
             if not isinstance(tickers, list):
                 return []
             usdt_pairs = []
+            elenen = 0
             for t in tickers:
                 symbol = t.get('symbol', '')
                 if symbol.endswith('USDT'):
-                    pair = Config.to_pair_symbol(symbol)
                     vol = float(t.get('quoteVolume', 0))
+                    if vol < min_volume:
+                        elenen += 1
+                        continue
+                    pair = Config.to_pair_symbol(symbol)
                     usdt_pairs.append((pair, vol))
             usdt_pairs.sort(key=lambda x: x[1], reverse=True)
             top_pairs = [p[0] for p in usdt_pairs[:limit]]
-            logger.info('Binance Futures top {} hacimli coin yuklendi: {} coin'.format(limit, len(top_pairs)))
+            logger.info(
+                'Binance Futures top %d hacimli coin yuklendi: %d coin (min hacim $%.0f altinda elenen: %d)',
+                limit, len(top_pairs), min_volume, elenen
+            )
             return top_pairs
         except Exception as e:
             logger.error('Top volume coins yuklenemedi: {}'.format(e))
             return []
 
+
 config = Config()
 
-# ============================================================
-# BINANCE FUTURES TESTNET CANLI VERI CEKICI
-# ============================================================
+
 
 class LiveDataFetcher:
     """Binance Futures Testnet API ile canli kripto verisi ceker"""
@@ -143,17 +148,29 @@ class LiveDataFetcher:
         self._last_fetch = 0
         self._fetch_interval = 5
         self._last_kline_time = 0
+        self._kline_lock = threading.Lock()
+        self.last_used_weight = 0
         self.news_cache = []
         self.news_cache_time = None
         self.last_error = None
         if not config.TOP_VOLUME_LOADED:
             limit = PAPER_SETTINGS.get('coin_adedi', 20)
-            config.TOP_VOLUME_PAIRS = Config.fetch_top_volume_pairs(limit)
+            min_vol = PAPER_SETTINGS.get('min_hacim_24h', 0)
+            config.TOP_VOLUME_PAIRS = Config.fetch_top_volume_pairs(limit, min_volume=min_vol)
             if not config.TOP_VOLUME_PAIRS:
                 logger.warning('Top volume coins yuklenemedi; MAJOR_PAIRS fallback kullaniliyor.')
                 config.TOP_VOLUME_PAIRS = config.MAJOR_PAIRS[:limit]
             config.TOP_VOLUME_LOADED = True
+            config.TOP_VOLUME_LAST_REFRESH = time.time()
         self._fetch_news()
+
+    def _update_weight_from_response(self, r):
+        try:
+            w = r.headers.get('X-MBX-USED-WEIGHT-1M')
+            if w is not None:
+                self.last_used_weight = int(w)
+        except Exception:
+            pass
 
     def _fetch_live_prices(self) -> Dict[str, float]:
         now = time.time()
@@ -164,6 +181,7 @@ class LiveDataFetcher:
         tickers = {}
         try:
             r = self.session.get(f'{_get_market_data_url()}/fapi/v1/ticker/24hr', timeout=15)
+            self._update_weight_from_response(r)
             if r.status_code == 200:
                 data = r.json()
                 if isinstance(data, list):
@@ -184,8 +202,8 @@ class LiveDataFetcher:
                                     'change_24h': chg,
                                     'high_24h': high,
                                     'low_24h': low,
-                                    'bid': float(t.get('bidPrice', 0)),
-                                    'ask': float(t.get('askPrice', 0)),
+                                    'bid': 0.0,
+                                    'ask': 0.0,
                                 }
                     self.last_error = None
                 else:
@@ -198,6 +216,22 @@ class LiveDataFetcher:
             self.last_error = 'Binance ticker baglanti hatasi: {}'.format(str(e)[:120])
             logger.warning(self.last_error)
 
+        try:
+            rb = self.session.get(f'{_get_market_data_url()}/fapi/v1/ticker/bookTicker', timeout=10)
+            self._update_weight_from_response(rb)
+            if rb.status_code == 200:
+                book_data = rb.json()
+                if isinstance(book_data, list):
+                    for b in book_data:
+                        symbol = b.get('symbol', '')
+                        if symbol.endswith('USDT'):
+                            pair = Config.to_pair_symbol(symbol)
+                            if pair in tickers:
+                                tickers[pair]['bid'] = float(b.get('bidPrice', 0))
+                                tickers[pair]['ask'] = float(b.get('askPrice', 0))
+        except Exception as e:
+            logger.warning('bookTicker (bid/ask) alinamadi: %s', str(e))
+
         self._live_prices = prices
         self._live_tickers = tickers
         self._last_fetch = now
@@ -206,6 +240,23 @@ class LiveDataFetcher:
     def _get_latest_price(self, symbol: str) -> float:
         prices = self._fetch_live_prices()
         return prices.get(symbol, 0)
+
+    def is_liquid(self, symbol: str, min_volume: float = 0, max_spread_pct: Optional[float] = None) -> Tuple[bool, Optional[str]]:
+        t = self._live_tickers.get(symbol)
+        if not t:
+            return False, 'ticker verisi yok'
+        vol = t.get('volume_24h', 0)
+        if min_volume and vol < min_volume:
+            return False, 'hacim yetersiz (${:,.0f} < ${:,.0f})'.format(vol, min_volume)
+        if max_spread_pct is not None:
+            bid = t.get('bid', 0)
+            ask = t.get('ask', 0)
+            if bid <= 0 or ask <= 0:
+                return False, 'spread verisi yok'
+            spread = (ask - bid) / bid * 100
+            if spread > max_spread_pct:
+                return False, 'spread cok yuksek (%{:.3f})'.format(spread)
+        return True, None
 
     def get_ticker(self, symbol: str) -> Dict:
         self._fetch_live_prices()
@@ -220,8 +271,8 @@ class LiveDataFetcher:
         change = ticker_data.get('change_24h', 0)
         high_24h = ticker_data.get('high_24h', live_price)
         low_24h = ticker_data.get('low_24h', live_price)
-        bid = ticker_data.get('bid', live_price * 0.9999)
-        ask = ticker_data.get('ask', live_price * 1.0001)
+        bid = ticker_data.get('bid') or live_price * 0.9999
+        ask = ticker_data.get('ask') or live_price * 1.0001
 
         return {
             'symbol': symbol,
@@ -240,16 +291,18 @@ class LiveDataFetcher:
         binance_sym = Config.to_binance_symbol(symbol)
         interval = self.TF_KLINE_INTERVAL.get(timeframe, '15m')
 
-        now = time.time()
-        elapsed = now - self._last_kline_time
-        if elapsed < 0.2:
-            time.sleep(0.2 - elapsed)
-        self._last_kline_time = time.time()
+        with self._kline_lock:
+            now = time.time()
+            elapsed = now - self._last_kline_time
+            if elapsed < 0.2:
+                time.sleep(0.2 - elapsed)
+            self._last_kline_time = time.time()
 
         try:
             url = f'{_get_market_data_url()}/fapi/v1/klines'
             params = {'symbol': binance_sym, 'interval': interval, 'limit': limit}
             r = self.session.get(url, params=params, timeout=10)
+            self._update_weight_from_response(r)
             if r.status_code != 200:
                 self.last_error = 'Binance klines {} HTTP {}'.format(symbol, r.status_code)
                 logger.warning(self.last_error)
@@ -423,59 +476,45 @@ class LiveDataFetcher:
             self._fetch_news()
         return self.news_cache
 
-# ============================================================
-# TEKNIK ANALIZ MOTORU
-# ============================================================
+
 
 class TechnicalAnalyzer:
     """pandas_ta kullanarak profesyonel teknik analiz"""
 
     @staticmethod
     def analyze_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-        """DataFrame uzerinde tum teknik gostergeleri hesapla"""
         if df.empty or len(df) < 50:
             return df
 
-        # RSI
         df['rsi'] = ta.rsi(df['close'], length=14)
 
-        # MACD
         macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
         df = pd.concat([df, macd], axis=1)
 
-        # EMA'lar
         for period in [9, 21, 50, 100, 200]:
             if len(df) >= period:
                 df['ema_{}'.format(period)] = ta.ema(df['close'], length=period)
 
-        # Bollinger Bands
         bb = ta.bbands(df['close'], length=20, std=2)
         df = pd.concat([df, bb], axis=1)
 
-        # ATR
         df['atr'] = ta.atr(df['high'], df['low'], df['close'], length=14)
 
-        # VWAP
         if 'volume' in df.columns:
             df['vwap'] = ta.vwap(df['high'], df['low'], df['close'], df['volume'])
 
-        # ADX
         adx = ta.adx(df['high'], df['low'], df['close'], length=14)
         df = pd.concat([df, adx], axis=1)
 
-        # Stochastic
         stoch = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3, smooth_k=3)
         df = pd.concat([df, stoch], axis=1)
 
-        # Volume SMA
         if 'volume' in df.columns:
             df['volume_sma'] = ta.sma(df['volume'], length=20)
 
         return df
 
-# ============================================================
-# ISLEM SINYAL URETICI
-# ============================================================
+
 
 class SignalGenerator:
     """Teknik gostergelere gore islem sinyali uret"""
@@ -484,7 +523,6 @@ class SignalGenerator:
         self.analyzer = TechnicalAnalyzer()
 
     def generate_signals(self, symbol: str, df: pd.DataFrame, timeframe: str = '15m') -> Dict:
-        """Coklu zaman diliminde sinyal uret"""
         if df.empty or len(df) < 50:
             return self._empty_signal(symbol, timeframe)
 
@@ -501,7 +539,6 @@ class SignalGenerator:
         bull_count = 0
         bear_count = 0
 
-        # RSI
         rsi = latest.get('rsi')
         if rsi is not None and not pd.isna(rsi):
             rsi = float(rsi)
@@ -518,7 +555,6 @@ class SignalGenerator:
                 signals.append({'tip': 'SAT', 'gosterge': 'RSI', 'deger': '{:.1f}'.format(rsi), 'siddet': 1, 'aciklama': 'Hafif asiri alim'})
                 signal_score -= 1; bear_count += 1
 
-        # MACD
         macd_col = 'MACD_12_26_9'
         signal_col = 'MACDs_12_26_9'
         macd_val = latest.get(macd_col)
@@ -535,7 +571,6 @@ class SignalGenerator:
                     signals.append({'tip': 'SAT', 'gosterge': 'MACD', 'deger': '{:.2f}'.format(macd_val_f), 'siddet': 2, 'aciklama': 'MACD sinyali asagi kesti'})
                     signal_score -= 2; bear_count += 1
 
-        # EMA
         ema_9 = latest.get('ema_9')
         ema_21 = latest.get('ema_21')
         ema_50 = latest.get('ema_50')
@@ -560,7 +595,6 @@ class SignalGenerator:
                     signals.append({'tip': 'SAT', 'gosterge': 'EMA Siralama', 'deger': '{:.2f}'.format(price), 'siddet': 2, 'aciklama': 'Guclu dusus trendi'})
                     signal_score -= 2; bear_count += 1
 
-        # Bollinger Bands
         bb_upper = latest.get('BBU_20_2.0'); bb_lower = latest.get('BBL_20_2.0')
         if bb_upper is not None and bb_lower is not None and not pd.isna(bb_upper) and not pd.isna(bb_lower):
             bb_upper_f = float(bb_upper); bb_lower_f = float(bb_lower)
@@ -571,7 +605,6 @@ class SignalGenerator:
                 signals.append({'tip': 'AL', 'gosterge': 'BB Alt', 'deger': '{:.2f}'.format(price), 'siddet': 2, 'aciklama': 'Bollinger alt bandina dokundu'})
                 signal_score += 2; bull_count += 1
 
-        # ADX
         adx = latest.get('ADX_14')
         if adx is not None and not pd.isna(adx):
             adx_f = float(adx)
@@ -580,7 +613,6 @@ class SignalGenerator:
             elif adx_f < 20:
                 signals.append({'tip': 'BILGI', 'gosterge': 'ADX', 'deger': '{:.1f}'.format(adx_f), 'siddet': 1, 'aciklama': 'Zayif / Yatay'})
 
-        # VWAP
         vwap = latest.get('vwap')
         if vwap is not None and not pd.isna(vwap):
             vwap_f = float(vwap)
@@ -591,7 +623,6 @@ class SignalGenerator:
                 signals.append({'tip': 'SAT', 'gosterge': 'VWAP', 'deger': '{:.2f}'.format(price), 'siddet': 1, 'aciklama': 'VWAP altinda'})
                 signal_score -= 1; bear_count += 1
 
-        # Hacim Analizi
         volume = latest.get('volume')
         volume_sma = latest.get('volume_sma')
         if volume is not None and volume_sma is not None and not pd.isna(volume) and not pd.isna(volume_sma):
@@ -604,18 +635,15 @@ class SignalGenerator:
                 signals.append({'tip': 'SAT', 'gosterge': 'HACIM', 'deger': '{:.1f}x'.format(vol_ratio), 'siddet': 2, 'aciklama': 'Yuksek hacimli dusus'})
                 signal_score -= 2; bear_count += 1
 
-        # Destek / Direnc Seviyeleri
         support_levels = self._find_key_levels(df, 'low')
         resistance_levels = self._find_key_levels(df, 'high')
 
-        # Nihai Karar
         trend = 'NOTR'
         if bull_count > bear_count * 2:
             trend = 'YUKSELIS'
         elif bear_count > bull_count * 2:
             trend = 'DUSUS'
 
-        # SL/TP Hesaplama
         islem_onerisi = self._calculate_sl_tp(latest, price, trend, support_levels, resistance_levels, timeframe)
 
         return {
@@ -647,14 +675,12 @@ class SignalGenerator:
         }
 
     def _find_key_levels(self, df: pd.DataFrame, price_col: str, n_levels: int = 3) -> List[float]:
-        """Onemli fiyat seviyelerini bul"""
         if df.empty or len(df) < 20:
             return []
 
         prices = df[price_col].values[-50:]
         current_price = float(df['close'].iloc[-1])
 
-        # Pivot noktalari
         key_levels = []
         for i in range(5, len(prices) - 5):
             if price_col == 'low':
@@ -664,7 +690,6 @@ class SignalGenerator:
                 if prices[i] == max(prices[i-5:i+6]) and prices[i] > current_price:
                     key_levels.append(round(float(prices[i]), 2))
 
-        # Benzersiz yap
         key_levels = sorted(set(key_levels))
         if price_col == 'low':
             return key_levels[-n_levels:] if len(key_levels) > n_levels else key_levels
@@ -672,11 +697,11 @@ class SignalGenerator:
             return key_levels[:n_levels] if len(key_levels) > n_levels else key_levels
 
     def _calculate_sl_tp(self, latest, price, trend, support_levels, resistance_levels, timeframe='15m'):
-        atr_val = float(latest.get('atr', 0))
-        if atr_val is None or (isinstance(atr_val, float) and pd.isna(atr_val)) or atr_val == 0:
+        atr_val = latest.get('atr', 0)
+        atr_val = float(atr_val) if atr_val is not None and not pd.isna(atr_val) else 0.0
+        if atr_val == 0:
             atr_val = price * 0.01
 
-        # 4-5 saat icinde kapanacak sekilde sikinti SL/TP
         tf_mult = {'1m': 0.5, '3m': 0.6, '5m': 0.7, '15m': 0.8, '1h': 1.0, '4h': 1.2, '1d': 1.5}
         mult = tf_mult.get(timeframe, 0.8)
         sl_dist = max(atr_val * mult, price * 0.002)
@@ -689,12 +714,14 @@ class SignalGenerator:
             if valid_supports:
                 closest = max(valid_supports)
                 sl_candidate = closest - atr_val * 0.3
-            ema_50 = float(latest.get('ema_50', 0))
-            if ema_50 and not pd.isna(ema_50) and ema_50 < entry and ema_50 > sl_candidate:
+            ema_50 = latest.get('ema_50', 0)
+            ema_50 = float(ema_50) if ema_50 is not None and not pd.isna(ema_50) else 0.0
+            if ema_50 and ema_50 < entry and ema_50 > sl_candidate:
                 sl_candidate = ema_50 - atr_val * 0.3
             sl = sl_candidate
             risk = entry - sl
-            if risk <= 0: risk = sl_dist
+            if risk <= 0:
+                risk = sl_dist
             return {
                 'yon': 'LONG', 'giris': entry, 'stop_loss': sl,
                 'take_kar_1': entry + risk * 1.5, 'take_kar_2': entry + risk * 2.5,
@@ -708,12 +735,14 @@ class SignalGenerator:
             if valid_resist:
                 closest = min(valid_resist)
                 sl_candidate = closest + atr_val * 0.3
-            ema_50 = float(latest.get('ema_50', 0))
-            if ema_50 and not pd.isna(ema_50) and ema_50 > entry and ema_50 < sl_candidate:
+            ema_50 = latest.get('ema_50', 0)
+            ema_50 = float(ema_50) if ema_50 is not None and not pd.isna(ema_50) else 0.0
+            if ema_50 and ema_50 > entry and ema_50 < sl_candidate:
                 sl_candidate = ema_50 + atr_val * 0.3
             sl = sl_candidate
             risk = sl - entry
-            if risk <= 0: risk = sl_dist
+            if risk <= 0:
+                risk = sl_dist
             return {
                 'yon': 'SHORT', 'giris': entry, 'stop_loss': sl,
                 'take_kar_1': entry - risk * 1.5, 'take_kar_2': entry - risk * 2.5,
@@ -740,9 +769,7 @@ class SignalGenerator:
             'zaman_damgasi': datetime.now().isoformat()
         }
 
-# ============================================================
-# RISK YONETIMI
-# ============================================================
+
 
 class RiskManager:
     """Risk yonetimi hesaplamalari"""
@@ -754,12 +781,10 @@ class RiskManager:
         if risk_per_unit == 0:
             return {'hata': 'Stop-loss giris ile ayni olamaz'}
 
-        # Pozisyon birim sayisi ve sozlesme degeri (kaldiracsiz)
         pos_units = risk_amount / risk_per_unit
         pos_value = pos_units * entry
         margin = pos_value / leverage if leverage else pos_value
 
-        # Likidasyon fiyati
         if yon == 'LONG':
             liq_price = entry - (entry - stop) * (leverage / max(leverage - 1, 0.1))
         else:
@@ -807,9 +832,7 @@ class RiskManager:
         else:
             return {'onerilen_kaldirac': 8, 'maks_kaldirac': 10, 'atr_yuzdesi': '{:.1f}%'.format(atr_percent), 'uyari': 'Dusuk volatilite'}
 
-# ============================================================
-# PAPER TRADER (Sanal Islem Sistemi)
-# ============================================================
+
 
 class PaperTrader:
     """Sanal islem sistemi - bakiye = kullanilabilir nakit, teminat ayri takip edilir"""
@@ -818,8 +841,8 @@ class PaperTrader:
 
     def __init__(self, initial_balance=100):
         self.initial_balance = initial_balance
-        self.balance = initial_balance      # kullanilabilir nakit
-        self.locked_margin = 0.0            # acik pozisyonlarda kilitli teminat
+        self.balance = initial_balance
+        self.locked_margin = 0.0
         self.positions = {}
         self.trade_history = []
         self.total_trades = 0
@@ -831,7 +854,6 @@ class PaperTrader:
         self.son_islem_zamani = {}
 
     def get_equity(self, results=None):
-        """ozsermaye = bakiye + kilitli teminat + acik pozisyon kar/zarar"""
         open_pnl = 0
         for sym, pos in self.positions.items():
             current_price = pos.get('current_price', pos['entry_price'])
@@ -841,16 +863,35 @@ class PaperTrader:
     def process(self, results):
         if self.durum == 'durdu':
             return
+
+        # DUZELTME (KRITIK): Onceki kodda '_check_position(...)' ve
+        # 'pos["current_price"] = price' satirlari for dongusunun DISINDA
+        # (yanlis girintiyle) yazilmisti - sadece dongudeki SON pozisyon
+        # icin bir kez calisiyordu, digger tum acik pozisyonlar hicbir
+        # zaman trailing stop / kismi satis / SL kontrolunden gecmiyordu.
         for symbol, pos in list(self.positions.items()):
             r = next((r for r in results if r['sembol'] == symbol), None)
-            if not r:
-                continue
-            price = r['fiyat']
-            self._check_position(symbol, pos, price)
-            pos['current_price'] = price
+            if r:
+                price = r['fiyat']
+            else:
+                price = data_fetcher._get_latest_price(symbol)
+                if price <= 0:
+                    logger.warning(
+                        '[PAPER] Canli fiyat alinamadi (coin tarama disi olabilir): %s - bu turda pozisyon guncellenemedi',
+                        symbol
+                    )
+                    continue
+            try:
+                self._check_position(symbol, pos, price)
+                if symbol in self.positions:
+                    self.positions[symbol]['current_price'] = price
+            except Exception as e:
+                logger.error('[PAPER] Pozisyon kontrol hatasi: %s - %s', symbol, str(e))
 
         if self.durum == 'baslat' and len(self.positions) < PAPER_SETTINGS['max_pozisyon']:
             for r in results:
+                if len(self.positions) >= PAPER_SETTINGS['max_pozisyon']:
+                    break
                 symbol = r['sembol']
                 if symbol in self.positions:
                     continue
@@ -861,6 +902,14 @@ class PaperTrader:
                     gecen = (datetime.now() - self.son_islem_zamani[symbol]).total_seconds() / 60
                     if gecen < soguma:
                         continue
+
+                min_vol = PAPER_SETTINGS.get('min_hacim_24h', 0)
+                max_spread = PAPER_SETTINGS.get('max_spread_yuzde')
+                uygun, sebep = data_fetcher.is_liquid(symbol, min_volume=min_vol, max_spread_pct=max_spread)
+                if not uygun:
+                    logger.info('[PAPER] Likidite yetersiz, islem acilmadi: %s - %s', symbol, sebep)
+                    continue
+
                 price = r.get('fiyat', 0)
                 if price < PAPER_SETTINGS['min_fiyat']:
                     continue
@@ -884,7 +933,10 @@ class PaperTrader:
                         best_tf = stf
                 if best_signal is None:
                     continue
-                self._open_position(symbol, best_signal, price, best_tf)
+                try:
+                    self._open_position(symbol, best_signal, price, best_tf)
+                except Exception as e:
+                    logger.error('[PAPER] Pozisyon acma hatasi: %s - %s', symbol, str(e))
 
         total_equity = self.get_equity(results)
         self.locked_margin = sum(
@@ -925,10 +977,7 @@ class PaperTrader:
                 if symbol in self.positions:
                     pos = self.positions[symbol]
                     pos['kismi_satis'] = True
-                    if direction == 'LONG':
-                        pos['trailing_stop'] = entry
-                    else:
-                        pos['trailing_stop'] = entry
+                    pos['trailing_stop'] = entry
                     logger.info('Kismi satis yapildi: %s, stop girise cekildi: %.6f', symbol, entry)
                 return
 
@@ -954,7 +1003,7 @@ class PaperTrader:
         satilan_miktar = pos['quantity'] * (yuzde / 100)
         leverage = pos.get('leverage', 1)
         entry = pos['entry_price']
-        satilan_notional = satilan_miktar * entry
+        satilan_notional = satilan_miktar * current_price
         satilan_teminat = satilan_notional / leverage
         komisyon = satilan_notional * self.KOMISYON_ORANI
         if current_price and pos['direction'] == 'LONG':
@@ -1022,6 +1071,7 @@ class PaperTrader:
             'direction': oneri['yon'],
             'entry_price': price,
             'current_price': price,
+            'stop_loss': oneri.get('stop_loss'),
             'trailing_stop': initial_trailing,
             'timeframe': timeframe,
             'leverage': leverage,
@@ -1077,11 +1127,11 @@ class PaperTrader:
             open_pnl += self._position_pnl(pos, current_price)
             total_locked += pos.get('teminat', pos.get('position_value', 0) / pos.get('leverage', 1))
         self.locked_margin = round(total_locked, 2)
-        
+
         total_equity = round(self.balance + self.locked_margin + open_pnl, 2)
         win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
         toplam_kapali_kar = round(sum(t.get('pnl', 0) for t in self.trade_history), 2)
-        
+
         positions_with_pnl = []
         for sym, pos in self.positions.items():
             current_price = pos.get('current_price', pos['entry_price'])
@@ -1103,7 +1153,7 @@ class PaperTrader:
             pos_data['current_pnl_percent'] = round(pnl_percent, 2)
             pos_data['trailing_kz'] = trailing_kz
             positions_with_pnl.append(pos_data)
-        
+
         return {
             'durum': self.durum,
             'baslangic_bakiyesi': self.initial_balance,
@@ -1127,9 +1177,7 @@ class PaperTrader:
         self.__init__(initial_balance)
         return self.get_state()
 
-# ============================================================
-# BINANCE CANLI ISLEM MODULU
-# ============================================================
+
 
 import hmac
 import hashlib
@@ -1137,6 +1185,7 @@ import time as _time
 
 BINANCE_LIVE_URL = 'https://fapi.binance.com'
 BINANCE_TESTNET_URL = 'https://testnet.binancefuture.com'
+
 
 class BinanceLiveTrader:
     """Binance Futures ile canli islem - test/live + otomatik islem"""
@@ -1156,29 +1205,39 @@ class BinanceLiveTrader:
         self.son_islem_zamani = {}
         self.trade_history = []
         self.config = self._load_config()
-        self.local_positions = {}  # trailing stop vs icin yerel takip
+        self.local_positions = {}
+
+        self._exchange_info_cache = None
+        self._exchange_info_cache_time = 0
+        self._exchange_info_ttl = 3600
+        self._symbol_filters_cache = {}
+
         self.equity_curve = [{'zaman': datetime.now().isoformat(), 'bakiye': 0}]
         self._load_trader_state()
 
     def _load_config(self):
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r') as f:
-                    data = json.load(f)
-                    if 'active_mode' not in data:
-                        data['active_mode'] = 'test'
-                    if 'testnet' not in data:
-                        data['testnet'] = {'api_key': '', 'api_secret': ''}
-                    if 'live' not in data:
-                        data['live'] = {'api_key': '', 'api_secret': ''}
-                    return data
-        except:
-            pass
-        return {
+        default_config = {
             'active_mode': 'test',
             'testnet': {'api_key': '', 'api_secret': ''},
             'live': {'api_key': '', 'api_secret': ''}
         }
+        if not os.path.exists(self.config_file):
+            logger.info('binance_config.json bulunamadi, varsayilan config kullaniliyor.')
+            return default_config
+        try:
+            with open(self.config_file, 'r') as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.error('binance_config.json okunamadi/bozuk: %s - varsayilan config kullaniliyor.', str(e))
+            return default_config
+
+        if 'active_mode' not in data:
+            data['active_mode'] = 'test'
+        if 'testnet' not in data:
+            data['testnet'] = {'api_key': '', 'api_secret': ''}
+        if 'live' not in data:
+            data['live'] = {'api_key': '', 'api_secret': ''}
+        return data
 
     def _save_config(self):
         with open(self.config_file, 'w') as f:
@@ -1233,8 +1292,8 @@ class BinanceLiveTrader:
                 self.son_islem_zamani = {k: datetime.fromisoformat(v) for k, v in state.get('son_islem_zamani', {}).items()}
                 self.trade_history = state.get('trade_history', [])
                 self.local_positions = state.get('local_positions', {})
-        except:
-            pass
+        except Exception as e:
+            logger.error('trader_state dosyasi okunamadi (%s): %s - varsayilan durum kullaniliyor.', state_file, str(e))
 
     def get_summary(self):
         history = self.trade_history
@@ -1335,19 +1394,58 @@ class BinanceLiveTrader:
             return BINANCE_TESTNET_URL
         return BINANCE_LIVE_URL
 
-    def _get_step_size(self, symbol):
+    def _get_exchange_info(self):
+        now = _time.time()
+        if self._exchange_info_cache and (now - self._exchange_info_cache_time) < self._exchange_info_ttl:
+            return self._exchange_info_cache
         try:
             url = self._get_base_url() + '/fapi/v1/exchangeInfo'
             r = self.session.get(url, timeout=10)
             data = r.json()
+            if isinstance(data, dict) and data.get('symbols'):
+                self._exchange_info_cache = data
+                self._exchange_info_cache_time = now
+                self._symbol_filters_cache = {}
+                return data
+            logger.warning('exchangeInfo beklenmeyen format dondu: %s', str(data)[:200])
+        except Exception as e:
+            logger.warning('exchangeInfo alinamadi: %s', str(e))
+        if self._exchange_info_cache:
+            logger.info('exchangeInfo guncellenemedi, bayat cache kullaniliyor.')
+        return self._exchange_info_cache
+
+    def _get_symbol_filters(self, symbol):
+        if symbol in self._symbol_filters_cache:
+            return self._symbol_filters_cache[symbol]
+
+        step_size = 0.001
+        tick_size = 0.00001
+        data = self._get_exchange_info()
+        if data:
+            found = False
             for s in data.get('symbols', []):
                 if s['symbol'] == symbol:
+                    found = True
                     for f in s.get('filters', []):
                         if f['filterType'] == 'LOT_SIZE':
-                            return float(f['stepSize'])
-            return 0.001
-        except:
-            return 0.001
+                            step_size = float(f['stepSize'])
+                        elif f['filterType'] == 'PRICE_FILTER':
+                            tick_size = float(f['tickSize'])
+                    break
+            if not found:
+                logger.warning('Sembol exchangeInfo icinde bulunamadi: %s - varsayilan step/tick kullaniliyor', symbol)
+        else:
+            logger.warning('exchangeInfo verisi yok: %s icin varsayilan step/tick kullaniliyor', symbol)
+
+        filters = {'step_size': step_size, 'tick_size': tick_size}
+        self._symbol_filters_cache[symbol] = filters
+        return filters
+
+    def _get_step_size(self, symbol):
+        return self._get_symbol_filters(symbol)['step_size']
+
+    def _get_price_tick(self, symbol):
+        return self._get_symbol_filters(symbol)['tick_size']
 
     def _round_step(self, qty, step):
         if step <= 0:
@@ -1399,7 +1497,37 @@ class BinanceLiveTrader:
     def _api_post(self, endpoint, params=None):
         return self._api_request('POST', endpoint, params)
 
-    def _get_fill_price(self, symbol, side, limit=20):
+    def _api_delete(self, endpoint, params=None):
+        active = self._get_active_config()
+        if not active.get('api_key'):
+            return {'error': 'API key tanimli degil'}
+        url = self._get_base_url() + endpoint
+        params = params or {}
+        params['timestamp'] = int(_time.time() * 1000)
+        params = self._sign(params)
+        headers = {'X-MBX-APIKEY': active['api_key']}
+        try:
+            r = self.session.delete(url, params=params, headers=headers, timeout=10)
+            return r.json()
+        except Exception as e:
+            return {'error': str(e)}
+
+    def _wait_for_fill(self, binance_sym, order_id, initial_result, max_wait=15):
+        fill_price = float(initial_result.get('avgPrice', 0))
+        order_status = initial_result.get('status', 'UNKNOWN')
+        if fill_price > 0 and order_status == 'FILLED':
+            return fill_price, order_status
+        for i in range(max_wait):
+            _time.sleep(1)
+            status_result = self._api_get('/fapi/v1/order', {'symbol': binance_sym, 'orderId': order_id})
+            if 'error' not in status_result:
+                order_status = status_result.get('status', 'UNKNOWN')
+                fill_price = float(status_result.get('avgPrice', 0))
+                if fill_price > 0 or order_status in ('FILLED', 'CANCELED', 'EXPIRED'):
+                    break
+        return fill_price, order_status
+
+    def _get_fill_price(self, symbol, side, limit=100):
         trades = self._api_get('/fapi/v1/userTrades', {'symbol': symbol, 'limit': limit})
         if not isinstance(trades, list) or not trades:
             return 0
@@ -1428,28 +1556,13 @@ class BinanceLiveTrader:
             if isinstance(klines, list) and klines:
                 max_high = max(float(k[2]) for k in klines)
                 min_low = min(float(k[3]) for k in klines)
-                if fill_price > max_high * 1.5 or fill_price < min_low * 0.5:
+                if fill_price > max_high * 1.05 or fill_price < min_low * 0.95:
                     logger.warning('[FILL_PRICE] Anormal fill: %s fill=%.6f klines=[%.6f-%.6f] - klines kullaniyor', symbol, fill_price, min_low, max_high)
                     last_kline = klines[-1]
                     return float(last_kline[4])
         except Exception as e:
             logger.warning('[FILL_PRICE] Klines dogrulama hatasi: %s - %s', symbol, str(e))
         return fill_price
-
-    def _api_delete(self, endpoint, params=None):
-        active = self._get_active_config()
-        if not active.get('api_key'):
-            return {'error': 'API key tanimli degil'}
-        url = self._get_base_url() + endpoint
-        params = params or {}
-        params['timestamp'] = int(_time.time() * 1000)
-        params = self._sign(params)
-        headers = {'X-MBX-APIKEY': active['api_key']}
-        try:
-            r = self.session.delete(url, params=params, headers=headers, timeout=10)
-            return r.json()
-        except Exception as e:
-            return {'error': str(e)}
 
     def get_balance(self):
         data = self._api_get('/fapi/v2/balance')
@@ -1489,8 +1602,8 @@ class BinanceLiveTrader:
                     try:
                         entry_dt = datetime.fromisoformat(entry_time)
                         sure_dk = round((datetime.now() - entry_dt).total_seconds() / 60, 1)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning('entry_time parse hatasi: %s - %s', binance_sym, str(e))
                 trailing_stop = local.get('trailing_stop', 0)
                 trailing_kz = 0
                 if trailing_stop > 0 and entry > 0 and amt != 0:
@@ -1546,19 +1659,19 @@ class BinanceLiveTrader:
         ticker = self._api_get('/fapi/v1/ticker/price', {'symbol': binance_sym})
         if 'error' in ticker:
             return ticker
-        price = float(ticker.get('price', 0))
-        if price <= 0:
+        ref_price = float(ticker.get('price', 0))
+        if ref_price <= 0:
             return {'error': 'Fiyat alinamadi'}
 
         step_size = self._get_step_size(binance_sym)
 
         notional = base_dolar * leverage
-        raw_qty = notional / price
+        raw_qty = notional / ref_price
         qty = self._round_step(raw_qty, step_size)
         if qty <= 0:
             return {'error': f'Miktar cok kucuk: {raw_qty}'}
 
-        actual_notional = qty * price
+        actual_notional = qty * ref_price
         if actual_notional < 5:
             return {'error': f'Notional cok kucuk: ${actual_notional:.2f} (min $5)'}
 
@@ -1574,16 +1687,27 @@ class BinanceLiveTrader:
         if 'error' in result:
             return result
 
+        order_id = result.get('orderId')
+        fill_price, order_status = self._wait_for_fill(binance_sym, order_id, result, max_wait=15)
+
+        if fill_price <= 0:
+            logger.warning('[LIVE] Gercek fill fiyati alinamadi (%s), ticker fiyati fallback olarak kullaniliyor: %s', order_status, symbol)
+            fill_price = ref_price
+        elif abs(fill_price - ref_price) / ref_price > 0.02:
+            logger.warning('[LIVE] Yuksek slippage tespit edildi: %s ref=%.6f fill=%.6f (%.2f%%)',
+                            symbol, ref_price, fill_price, (fill_price - ref_price) / ref_price * 100)
+
         self.total_trades += 1
         return {
             'durum': 'acildi',
             'symbol': symbol,
             'yon': yon,
-            'fiyat': price,
+            'fiyat': fill_price,
+            'referans_fiyat': ref_price,
             'miktar': qty,
             'notional': notional,
             'kaldirac': leverage,
-            'emir_id': result.get('orderId'),
+            'emir_id': order_id,
             'sonuc': result
         }
 
@@ -1602,7 +1726,6 @@ class BinanceLiveTrader:
         side = 'SELL' if yon == 'LONG' else 'BUY'
 
         qty = abs(pos['miktar'])
-
         step_size = self._get_step_size(binance_sym)
         qty = self._round_step(qty, step_size)
 
@@ -1619,30 +1742,15 @@ class BinanceLiveTrader:
             return {'error': 'Kapatma basarisiz', 'symbol': symbol, 'result': result}
 
         order_id = result.get('orderId')
-        fill_price = float(result.get('avgPrice', 0))
-        order_status = result.get('status', 'UNKNOWN')
-
-        if fill_price <= 0 and order_status != 'FILLED':
-            logger.info('MARKET emir dolmadi, bekleniyor: %s orderId=%s status=%s', symbol, order_id, order_status)
-            for i in range(15):
-                _time.sleep(1)
-                status_result = self._api_get('/fapi/v1/order', {
-                    'symbol': binance_sym,
-                    'orderId': order_id
-                })
-                if 'error' not in status_result:
-                    order_status = status_result.get('status', 'UNKNOWN')
-                    fill_price = float(status_result.get('avgPrice', 0))
-                    if fill_price > 0 or order_status in ('FILLED', 'CANCELED', 'EXPIRED'):
-                        break
-            logger.info('Emir sonucu: %s status=%s fill_price=%s', symbol, order_status, fill_price)
+        fill_price, order_status = self._wait_for_fill(binance_sym, order_id, result, max_wait=15)
+        logger.info('Emir sonucu: %s status=%s fill_price=%s', symbol, order_status, fill_price)
 
         if fill_price <= 0:
             logger.error('KAPATMA BASARISIZ: Fill price alinamadi: %s status=%s', symbol, order_status)
             return {'error': 'Kapatma basarisiz - fill price alinamadi', 'symbol': symbol, 'order_status': order_status}
 
         entry = pos['giris_fiyati']
-        notional = entry * qty
+        notional = fill_price * qty
         komisyon = notional * self.KOMISYON_ORANI * 2
         if yon == 'LONG':
             realized_pnl = (fill_price - entry) * qty - komisyon
@@ -1661,11 +1769,11 @@ class BinanceLiveTrader:
         if entry_time:
             try:
                 sure_dk = round((datetime.now() - datetime.fromisoformat(entry_time)).total_seconds() / 60, 1)
-            except:
-                pass
+            except Exception as e:
+                logger.warning('entry_time parse hatasi (close_position): %s - %s', binance_sym, str(e))
 
         self.trade_history.append({
-            'symbol': symbol, 'direction': yon,
+            'symbol': binance_sym, 'direction': yon,
             'entry_price': entry,
             'close_price': fill_price,
             'pnl': round(realized_pnl, 4),
@@ -1682,11 +1790,7 @@ class BinanceLiveTrader:
         self.local_positions.pop(binance_sym, None)
         self._save_trader_state()
 
-        return {
-            'durum': 'kapandı',
-            'symbol': symbol,
-            'pnl': realized_pnl
-        }
+        return {'durum': 'kapandı', 'symbol': symbol, 'pnl': realized_pnl}
 
     def set_stop_loss(self, symbol, yon, stop_price):
         binance_sym = symbol.replace('/', '')
@@ -1764,20 +1868,15 @@ class BinanceLiveTrader:
                 leverage = local.get('leverage', 1)
                 timeframe = local.get('timeframe', '?')
                 base_dolar = local.get('base_dolar', 4)
-                fill_price = self._get_fill_price(sym, direction, limit=20)
+                fill_price = self._get_fill_price(sym, direction, limit=100)
                 if fill_price <= 0:
                     fill_price = entry
-                max_deviation = 1.0
-                if direction == 'LONG':
-                    if fill_price < entry * (1 - max_deviation):
-                        logger.warning('[ORPHAN] Fill price entry cok uzak: %s entry=%.6f fill=%.6f - entry kullaniyor', sym, entry, fill_price)
-                        fill_price = entry
-                else:
-                    if fill_price > entry * (1 + max_deviation):
-                        logger.warning('[ORPHAN] Fill price entry cok uzak: %s entry=%.6f fill=%.6f - entry kullaniyor', sym, entry, fill_price)
-                        fill_price = entry
+                max_deviation = 0.10
+                if abs(fill_price - entry) / entry > max_deviation:
+                    logger.warning('[ORPHAN] Fill price entry cok uzak: %s entry=%.6f fill=%.6f - entry kullaniyor', sym, entry, fill_price)
+                    fill_price = entry
                 qty = (base_dolar * leverage / entry) if entry > 0 else 0
-                notional = entry * qty
+                notional = fill_price * qty
                 komisyon = notional * self.KOMISYON_ORANI * 2
                 if direction == 'LONG':
                     realized_pnl = (fill_price - entry) * qty - komisyon
@@ -1787,8 +1886,8 @@ class BinanceLiveTrader:
                 if entry_time:
                     try:
                         sure_dk = round((datetime.now() - datetime.fromisoformat(entry_time)).total_seconds() / 60, 1)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning('entry_time parse hatasi (orphan): %s - %s', sym, str(e))
                 self.trade_history.append({
                     'symbol': sym, 'direction': direction,
                     'entry_price': entry,
@@ -1843,8 +1942,18 @@ class BinanceLiveTrader:
                     'guven': 0,
                     'base_dolar': PAPER_SETTINGS.get('islem_basi_dolar', 4),
                     'v2': True,
+                    # DUZELTME: bu dictte 'kismi_satis' anahtari hic yoktu -
+                    # 'orphan-adoption' ile takibe alinan pozisyonlarda
+                    # local.get('kismi_satis') her zaman None donuyordu (falsy,
+                    # yani sorun yaratmiyordu) ama alan tutarliligini
+                    # saglamak icin acikca False olarak ekliyoruz.
+                    'kismi_satis': False,
                 }
 
+        # DUZELTME: her pozisyon icin _check_live_position artik try/except
+        # ile korunuyor. Eskiden bir coin'de (ornegin _place_binance_sl
+        # AttributeError firlattiginda) hata olustugunda TUM dongu kesiliyor,
+        # o coin'den SONRAKI hicbir pozisyon o turda kontrol edilmiyordu.
         for pos in binance_positions:
             sym = pos['symbol']
             r = next((r for r in results if r['sembol'] == sym or r['sembol'].replace('/', '') == sym), None)
@@ -1852,12 +1961,17 @@ class BinanceLiveTrader:
                 price = r['fiyat']
             else:
                 price = pos['mark_fiyati']
-            self._check_live_position(sym, pos, price)
+            try:
+                self._check_live_position(sym, pos, price)
+            except Exception as e:
+                logger.error('[LIVE] Pozisyon kontrol hatasi: %s - %s', sym, str(e))
 
         if self.durum == 'bekle':
             pass
         elif len(binance_positions) < PAPER_SETTINGS.get('max_pozisyon', 5):
             for r in results:
+                if len(self.get_positions()) >= PAPER_SETTINGS.get('max_pozisyon', 5) if isinstance(self.get_positions(), list) else False:
+                    break
                 symbol = r['sembol']
                 binance_sym = symbol.replace('/', '')
                 if any(p['symbol'] == binance_sym for p in binance_positions):
@@ -1869,6 +1983,14 @@ class BinanceLiveTrader:
                     gecen = (datetime.now() - self.son_islem_zamani[symbol]).total_seconds() / 60
                     if gecen < soguma:
                         continue
+
+                min_vol = PAPER_SETTINGS.get('min_hacim_24h', 0)
+                max_spread = PAPER_SETTINGS.get('max_spread_yuzde')
+                uygun, sebep = data_fetcher.is_liquid(symbol, min_volume=min_vol, max_spread_pct=max_spread)
+                if not uygun:
+                    logger.info('[LIVE] Likidite yetersiz, islem acilmadi: %s - %s', symbol, sebep)
+                    continue
+
                 price = r.get('fiyat', 0)
                 if price < PAPER_SETTINGS.get('min_fiyat', 0.01):
                     continue
@@ -1892,8 +2014,10 @@ class BinanceLiveTrader:
                 if best_signal is None:
                     continue
                 logger.info('[LIVE] Islem sinyali: %s %s guven=%s tf=%s', symbol, best_signal.get('yon','?'), best_guven, best_tf)
-                self._open_live_position(symbol, best_signal, price, best_tf)
-
+                try:
+                    self._open_live_position(symbol, best_signal, price, best_tf)
+                except Exception as e:
+                    logger.error('[LIVE] Pozisyon acma hatasi: %s - %s', symbol, str(e))
 
         try:
             balance = self.get_balance()
@@ -1901,8 +2025,8 @@ class BinanceLiveTrader:
             self.equity_curve.append({'zaman': datetime.now().isoformat(), 'bakiye': round(bakiye, 2)})
             if len(self.equity_curve) > 500:
                 self.equity_curve = self.equity_curve[-500:]
-        except:
-            pass
+        except Exception as e:
+            logger.warning('Equity curve guncellenemedi: %s', str(e))
         self._save_trader_state()
 
     def _check_live_position(self, symbol, pos, current_price):
@@ -1946,6 +2070,10 @@ class BinanceLiveTrader:
                 self._cancel_binance_sl(symbol)
                 result = self._partial_close_live(symbol, kismi_yuzde, direction, binance_mark)
                 if result and 'error' not in result:
+                    # DUZELTME: bayrak artik _partial_close_live'in KENDISI
+                    # icinde de garanti altina alindi (asagida). Burada
+                    # tekrar set etmek zararsiz (idempotent) - iki kat
+                    # guvenlik icin birakiliyor.
                     self.local_positions[symbol]['kismi_satis'] = True
                     self.local_positions[symbol]['trailing_stop'] = entry
                     sl_result = self._place_binance_sl(symbol, direction, entry, leverage)
@@ -2016,45 +2144,30 @@ class BinanceLiveTrader:
             return {'error': 'Kismi satis basarisiz', 'symbol': symbol, 'result': result}
 
         order_id = result.get('orderId')
-        fill_price = float(result.get('avgPrice', 0))
-        order_status = result.get('status', 'UNKNOWN')
-
-        if fill_price <= 0 and order_status != 'FILLED':
-            logger.info('KISMI_SATIS: Emir dolmadi, bekleniyor: %s orderId=%s', symbol, order_id)
-            for i in range(15):
-                _time.sleep(1)
-                status_result = self._api_get('/fapi/v1/order', {
-                    'symbol': binance_sym,
-                    'orderId': order_id
-                })
-                if 'error' not in status_result:
-                    order_status = status_result.get('status', 'UNKNOWN')
-                    fill_price = float(status_result.get('avgPrice', 0))
-                    if fill_price > 0 or order_status in ('FILLED', 'CANCELED', 'EXPIRED'):
-                        break
-            logger.info('KISMI_SATIS emir sonucu: %s status=%s fill_price=%s', symbol, order_status, fill_price)
+        fill_price, order_status = self._wait_for_fill(binance_sym, order_id, result, max_wait=15)
+        logger.info('KISMI_SATIS emir sonucu: %s status=%s fill_price=%s', symbol, order_status, fill_price)
 
         if fill_price <= 0:
             logger.error('KISMI_SATIS BASARISIZ: Fill price alinamadi: %s status=%s', symbol, order_status)
             return {'error': 'Kismi satis basarisiz - fill price alinamadi', 'symbol': symbol, 'order_status': order_status}
 
         entry = pos['giris_fiyati']
-        notional = entry * qty
-        komisyon = notional * self.KOMISYON_ORANI * 2
+        notional = fill_price * qty
+        komisyon = notional * self.KOMISYON_ORANI
         if direction == 'LONG':
             realized_pnl = (fill_price - entry) * qty - komisyon
         else:
             realized_pnl = (entry - fill_price) * qty - komisyon
         self.total_trades += 1
-        local = self.local_positions.get(symbol, {})
+        local = self.local_positions.get(binance_sym, {})
         entry_time = local.get('entry_time', '')
         close_time = datetime.now().isoformat()
         sure_dk = 0
         if entry_time:
             try:
                 sure_dk = round((datetime.now() - datetime.fromisoformat(entry_time)).total_seconds() / 60, 1)
-            except:
-                pass
+            except Exception as e:
+                logger.warning('entry_time parse hatasi (kismi_satis): %s - %s', symbol, str(e))
         self.trade_history.append({
             'symbol': symbol, 'direction': direction,
             'entry_price': entry, 'close_price': fill_price,
@@ -2067,13 +2180,41 @@ class BinanceLiveTrader:
             'close_time': close_time,
             'sure_dk': sure_dk,
         })
-        sl_result = self._place_binance_sl(binance_sym, direction, entry, pos.get('kaldirac', 1))
-        if sl_result and 'error' not in sl_result:
-            logger.info('Kismi satis sonrasi SL guncellendi (entry): %s @ %.6f', symbol, entry)
-            if binance_sym in self.local_positions:
-                self.local_positions[binance_sym]['sl_order_id'] = sl_result.get('algoId') or sl_result.get('orderId')
-        else:
-            logger.warning('Kismi satis sonrasi SL guncellenemedi: %s -> %s', symbol, sl_result)
+
+        # DUZELTME (KRITIK - KOK SEBEP): _place_binance_sl daha once
+        # _round_price'in icine yanlis girintiyle "gomulmustu" ve BIR SINIF
+        # METODU OLARAK HIC VAR OLMUYORDU (hasattr=False, cagrildiginda
+        # AttributeError firlatiyordu). Bu try/except OLMADAN cagriliyordu,
+        # bu yuzden asagidaki kod (kismi_satis bayragini set eden ve
+        # _save_trader_state cagiran satirlar) HICBIR ZAMAN CALISAMIYORDU -
+        # fonksiyon burada cokup process()'in en disindaki genel
+        # try/except'e kadar zipliyordu. Iste FXSUSDT'nin 3 dakikada 3 kez
+        # kismi satisa ugramasinin (ve muhtemelen hicbir pozisyonda gercek
+        # bir SL emrinin hic kurulamamis olmasinin) tam nedeni buydu.
+        # _place_binance_sl artik asagida class seviyesinde DOGRU sekilde
+        # tanimli oldugu icin bu cagri artik guvenle calisiyor, ama yine de
+        # ekstra guvenlik icin try/except ile sardik.
+        try:
+            sl_result = self._place_binance_sl(binance_sym, direction, entry, pos.get('kaldirac', 1))
+            if sl_result and 'error' not in sl_result:
+                logger.info('Kismi satis sonrasi SL guncellendi (entry): %s @ %.6f', symbol, entry)
+                if binance_sym in self.local_positions:
+                    self.local_positions[binance_sym]['sl_order_id'] = sl_result.get('algoId') or sl_result.get('orderId')
+            else:
+                logger.warning('Kismi satis sonrasi SL guncellenemedi: %s -> %s', symbol, sl_result)
+        except Exception as e:
+            logger.error('Kismi satis sonrasi SL guncelleme hatasi: %s -> %s', symbol, str(e))
+
+        # Bayragi HER DURUMDA (SL guncellemesi basarisiz olsa bile) set
+        # ediyoruz - cunku satis Binance'te zaten GERCEKLESTI, tekrar
+        # denenmemesi gerekiyor.
+        for key in (symbol, binance_sym):
+            if key in self.local_positions:
+                self.local_positions[key]['kismi_satis'] = True
+                self.local_positions[key]['son_kismi_satis_zamani'] = datetime.now().isoformat()
+
+        self._save_trader_state()
+
         return result
 
     def _cancel_binance_sl(self, binance_sym):
@@ -2093,20 +2234,6 @@ class BinanceLiveTrader:
         except Exception as e:
             logger.warning('Algo SL emir iptali hatasi %s: %s', binance_sym, str(e))
 
-    def _get_price_tick(self, symbol):
-        try:
-            url = self._get_base_url() + '/fapi/v1/exchangeInfo'
-            r = self.session.get(url, timeout=10)
-            data = r.json()
-            for s in data.get('symbols', []):
-                if s['symbol'] == symbol:
-                    for f in s.get('filters', []):
-                        if f['filterType'] == 'PRICE_FILTER':
-                            return float(f['tickSize'])
-        except:
-            pass
-        return 0.00001
-
     def _round_price(self, price, tick):
         if tick <= 0:
             return price
@@ -2115,6 +2242,19 @@ class BinanceLiveTrader:
         d_price = Decimal(str(price))
         return float((d_price // d_tick) * d_tick)
 
+    # =========================================================================
+    # DUZELTME (KRITIK - KOK SEBEP): Bu fonksiyon eskiden yanlislikla
+    # _round_price'in ICINE, onun 'return' satirindan SONRA (yani hicbir
+    # zaman calismayan / dead code) nestelenmisti. Python'da bu, bir
+    # SyntaxError vermiyor (Python nested function tanimina izin verir) ama
+    # sonuc olarak '_place_binance_sl' BinanceLiveTrader sinifinin bir metodu
+    # olarak HIC VAR OLMUYORDU. self._place_binance_sl(...) cagrildigi HER
+    # yerde (burada, _check_live_position'da, _open_live_position'da)
+    # AttributeError firlatiliyordu.
+    #
+    # Bu fonksiyon artik class seviyesinde (4 bosluk girinti), _round_price
+    # ile ayni seviyede, BAGIMSIZ bir metod olarak tanimli.
+    # =========================================================================
     def _place_binance_sl(self, binance_sym, yon, sl_price, leverage):
         step_size = self._get_step_size(binance_sym)
         price_tick = self._get_price_tick(binance_sym)
@@ -2166,18 +2306,23 @@ class BinanceLiveTrader:
             logger.warning('[LIVE] Acilamadi: %s - %s', symbol, result.get('error'))
             return
 
+        gercek_fiyat = result.get('fiyat', price)
+        if gercek_fiyat != price:
+            logger.info('[LIVE] Trailing stop gercek fill fiyatindan kuruluyor: %s tarama_fiyati=%.6f fill_fiyati=%.6f',
+                         symbol, price, gercek_fiyat)
+
         ts_pct = (PAPER_SETTINGS.get('trailing_stop_yuzde') or 3.0) / 100
         if yon == 'LONG':
-            initial_trailing = price * (1 - ts_pct)
+            initial_trailing = gercek_fiyat * (1 - ts_pct)
         else:
-            initial_trailing = price * (1 + ts_pct)
+            initial_trailing = gercek_fiyat * (1 + ts_pct)
 
         binance_sym = symbol.replace('/', '')
         self.local_positions[binance_sym] = {
             'trailing_stop': initial_trailing,
             'timeframe': timeframe,
             'entry_time': datetime.now().isoformat(),
-            'entry_price': price,
+            'entry_price': gercek_fiyat,
             'direction': yon,
             'leverage': leverage,
             'guven': oneri.get('guven_puani', 0),
@@ -2186,15 +2331,22 @@ class BinanceLiveTrader:
             'sl_order_id': None,
             'kismi_satis': False,
         }
-        sl_result = self._place_binance_sl(binance_sym, yon, initial_trailing, leverage)
-        if sl_result and 'error' not in sl_result:
-            self.local_positions[binance_sym]['sl_order_id'] = sl_result.get('algoId') or sl_result.get('orderId')
-            logger.info('Trailing STOP gonderildi: %s %s @ %.6f (%.1f%%)', yon, symbol, initial_trailing, ts_pct * 100)
-        else:
-            logger.warning('Trailing STOP gonderilemedi: %s -> %s', symbol, sl_result)
+        try:
+            sl_result = self._place_binance_sl(binance_sym, yon, initial_trailing, leverage)
+            if sl_result and 'error' not in sl_result:
+                self.local_positions[binance_sym]['sl_order_id'] = sl_result.get('algoId') or sl_result.get('orderId')
+                logger.info('Trailing STOP gonderildi: %s %s @ %.6f (%.1f%%)', yon, symbol, initial_trailing, ts_pct * 100)
+            else:
+                logger.warning('Trailing STOP gonderilemedi: %s -> %s', symbol, sl_result)
+        except Exception as e:
+            logger.error('Trailing STOP gonderme hatasi: %s -> %s', symbol, str(e))
         self.son_islem_zamani[symbol] = datetime.now()
 
+
+
+# ============================================================
 # Paper Trader Ayarlari (runtime'da degistirilebilir, dosyaya kaydedilir)
+# ============================================================
 SETTINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'paper_settings.json')
 
 DEFAULT_PAPER_SETTINGS = {
@@ -2213,6 +2365,9 @@ DEFAULT_PAPER_SETTINGS = {
     'soguma_dakika': 60,
     'coin_adedi': 100,
     'gercek_veri_modu': True,
+    'min_hacim_24h': 5000000,
+    'max_spread_yuzde': 0.15,
+    'top_liste_yenileme_saat': 6,
 }
 
 def load_paper_settings():
@@ -2245,13 +2400,30 @@ live_trader = BinanceLiveTrader()
 # ============================================================
 # FLASK API ENDPOINTS
 # ============================================================
-# TARAMA THROTTLE
-# ============================================================
 
-import threading
 _last_scan_time = 0
 _scan_lock = threading.Lock()
-SCAN_MIN_INTERVAL = 90
+
+SCAN_MIN_INTERVAL_FLOOR = 20
+SCAN_MIN_INTERVAL_CEILING = 90
+WEIGHT_LIMIT_PER_MIN = 2400
+WEIGHT_SAFE_THRESHOLD = 0.5
+WEIGHT_DANGER_THRESHOLD = 0.75
+
+def _get_dynamic_scan_interval():
+    used_weight = getattr(data_fetcher, 'last_used_weight', 0)
+    ratio = used_weight / WEIGHT_LIMIT_PER_MIN if WEIGHT_LIMIT_PER_MIN else 0
+
+    if ratio < WEIGHT_SAFE_THRESHOLD:
+        interval = SCAN_MIN_INTERVAL_FLOOR
+    elif ratio > WEIGHT_DANGER_THRESHOLD:
+        interval = SCAN_MIN_INTERVAL_CEILING
+    else:
+        span = WEIGHT_DANGER_THRESHOLD - WEIGHT_SAFE_THRESHOLD
+        pos = (ratio - WEIGHT_SAFE_THRESHOLD) / span if span > 0 else 1
+        interval = SCAN_MIN_INTERVAL_FLOOR + pos * (SCAN_MIN_INTERVAL_CEILING - SCAN_MIN_INTERVAL_FLOOR)
+
+    return round(interval, 1), used_weight, round(ratio * 100, 1)
 
 @app.route('/')
 def index():
@@ -2259,6 +2431,7 @@ def index():
 
 @app.route('/api/health')
 def health():
+    interval, used_weight, ratio_pct = _get_dynamic_scan_interval()
     return jsonify({
         'durum': 'saglikli',
         'zaman': datetime.now().isoformat(),
@@ -2267,6 +2440,12 @@ def health():
             'teknik_analiz': 'aktif',
             'sinyal_uretici': 'aktif',
             'risk_yoneticisi': 'aktif'
+        },
+        'rate_limit': {
+            'kullanilan_agirlik_1dk': used_weight,
+            'limit_1dk': WEIGHT_LIMIT_PER_MIN,
+            'kullanim_yuzdesi': ratio_pct,
+            'guncel_tarama_araligi_sn': interval
         }
     })
 
@@ -2289,22 +2468,34 @@ def get_ticker(sembol):
         sym = sym + '/USDT'
     ticker = data_fetcher.get_ticker(sym)
     if ticker.get('price', 0) == 0:
-        return jsonify({'error': 'Canli fiyat alinamadi.', 'reason': ticker.get('error', 'Canli veri kaynagi kesildi.')}, 503)
+        return jsonify({'error': 'Canli fiyat alinamadi.', 'reason': ticker.get('error', 'Canli veri kaynagi kesildi.')}), 503
     return jsonify(ticker)
 
 _last_scan_result = None
-_last_scan_lock = threading.Lock()
 
 @app.route('/api/market/all')
 def get_all_analysis():
-    """Tum coinler - her coin tamamen paralel islenir"""
     global _last_scan_time, _last_scan_result
     tf = request.args.get('timeframe', '15m')
     now = time.time()
 
+    scan_interval, used_weight, ratio_pct = _get_dynamic_scan_interval()
+
     with _scan_lock:
-        if now - _last_scan_time < SCAN_MIN_INTERVAL and _last_scan_result is not None:
+        if now - _last_scan_time < scan_interval and _last_scan_result is not None:
             return jsonify(_last_scan_result)
+
+    refresh_saat = PAPER_SETTINGS.get('top_liste_yenileme_saat', 6)
+    if now - config.TOP_VOLUME_LAST_REFRESH > refresh_saat * 3600:
+        limit = PAPER_SETTINGS.get('coin_adedi', 100)
+        min_vol = PAPER_SETTINGS.get('min_hacim_24h', 0)
+        fresh_pairs = Config.fetch_top_volume_pairs(limit, min_volume=min_vol)
+        if fresh_pairs:
+            config.TOP_VOLUME_PAIRS = fresh_pairs
+            config.TOP_VOLUME_LAST_REFRESH = now
+            logger.info('Top volume coin listesi yenilendi: %d coin', len(fresh_pairs))
+        else:
+            logger.warning('Top volume coin listesi yenilenemedi, eski liste kullaniliyor.')
 
     SCAN_TFS = PAPER_SETTINGS.get('tarama_tfleri', ['1m', '3m', '5m', '15m'])
     kara_liste = PAPER_SETTINGS.get('kara_liste', [])
@@ -2314,11 +2505,24 @@ def get_all_analysis():
         all_pairs = [p for p in config.MAJOR_PAIRS if p not in kara_liste]
         logger.warning('TOP_VOLUME_PAIRS bos; MAJOR_PAIRS kullaniliyor.')
 
-    # Fiyatlari tek seferde cek
     data_fetcher._fetch_live_prices()
     if not data_fetcher._live_prices:
         reason = data_fetcher.last_error or 'Binance fiyat verisi alinamadi.'
         return jsonify({'error': 'Canli veri alinamadi.', 'reason': reason}), 503
+
+    min_vol = PAPER_SETTINGS.get('min_hacim_24h', 0)
+    max_spread = PAPER_SETTINGS.get('max_spread_yuzde')
+    likit_pairs = []
+    elenen_sayisi = 0
+    for pair in all_pairs:
+        uygun, _sebep = data_fetcher.is_liquid(pair, min_volume=min_vol, max_spread_pct=max_spread)
+        if uygun:
+            likit_pairs.append(pair)
+        else:
+            elenen_sayisi += 1
+    if elenen_sayisi > 0:
+        logger.info('Likidite filtresi: %d coin elendi, %d coin tarama listesinde.', elenen_sayisi, len(likit_pairs))
+    all_pairs = likit_pairs if likit_pairs else all_pairs
 
     def _process_coin(pair):
         ticker = data_fetcher.get_ticker(pair)
@@ -2341,8 +2545,8 @@ def get_all_analysis():
                     best_tf_signal['_tf'] = stf
                 if best_trend == 'NOTR' and sig_stf.get('trend', 'NOTR') != 'NOTR':
                     best_trend = sig_stf.get('trend', 'NOTR')
-            except:
-                pass
+            except Exception as e:
+                logger.warning('Sinyal hesaplama hatasi: %s [%s] - %s', pair, stf, str(e))
         return {
             'sembol': pair,
             'fiyat': ticker.get('price', 0),
@@ -2361,19 +2565,20 @@ def get_all_analysis():
     with ThreadPoolExecutor(max_workers=15) as executor:
         futures = {executor.submit(_process_coin, pair): pair for pair in all_pairs}
         for future in as_completed(futures):
+            pair = futures[future]
             try:
                 r = future.result()
                 if r:
                     results.append(r)
-            except:
-                pass
+            except Exception as e:
+                logger.error('Coin islenirken hata: %s - %s', pair, str(e))
 
     if not results:
         reason = data_fetcher.last_error or 'Canli OHLCV verisi alinamadi.'
         return jsonify({'error': 'Canli veri alinamadi.', 'reason': reason}), 503
 
     results.sort(key=lambda x: x.get('guven_puani', 0), reverse=True)
-    
+
     try:
         paper_trader.process(results)
     except Exception as e:
@@ -2387,7 +2592,9 @@ def get_all_analysis():
         'sonuclar': results,
         'toplam': len(results),
         'zaman': datetime.now().isoformat(),
-        'zaman_dilimi': tf
+        'zaman_dilimi': tf,
+        'tarama_araligi_sn': scan_interval,
+        'rate_limit_kullanim_yuzdesi': ratio_pct
     }
     with _scan_lock:
         _last_scan_time = time.time()

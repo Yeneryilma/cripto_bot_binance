@@ -780,7 +780,7 @@ async function refreshAll() {
 // ============================
 async function loadSettings() {
     try {
-        const data = await fetchAPI('/api/paper/settings');
+        let data = await fetchAPI('/api/paper/settings');
         if (!data) {
             data = {islem_basi_dolar:50,kaldirac:1,coin_adedi:100,min_fiyat:0.01,trailing_stop_yuzde:3.0,sabit_stop_yuzde:2.0,kismi_satis_yuzde:25,kismi_satis_kar_hedefi:1.0,max_pozisyon:20,min_guven:30,min_sinyal_puani:2,soguma_dakika:60,tarama_tfleri:['1m','3m','5m','15m'],kara_liste:[]};
         }
