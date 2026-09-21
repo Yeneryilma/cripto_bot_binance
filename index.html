@@ -196,7 +196,6 @@
         body.viewer-mode .viewer-control { display: none !important; }
         body.viewer-mode #tabSettings { display: none !important; }
         body.viewer-mode .tab[onclick*="settings"] { display: none !important; }
-        body.viewer-mode .tab[onclick*="islem"] { opacity: 0.5; pointer-events: none; }
     </style>
 </head>
 <body>
@@ -335,6 +334,7 @@
                 </button>
             </div>
             <div id="islemStatus" style="margin-top:12px;font-size:14px;color:var(--text-muted);"></div>
+            <div id="uptimeDisplay" style="margin-top:4px;font-size:12px;color:var(--text-muted);"></div>
         </div>
 
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px;">
@@ -951,12 +951,20 @@ async function refreshIslem() {
             modeInfo.innerHTML = '<span style="color:#ff9800;">' + mode + ' icin API key gerekli (binance_config.json)</span>';
         }
 
+        var komisyon = data.toplam_komisyon || 0;
         balCard.innerHTML = '<div class="label">Bakiye</div><div class="value">$' + (data.toplam_bakiye||0).toFixed(2) + '</div><div class="subtext">Kilitli: $' + (data.kilitli_teminat||0).toFixed(2) + ' | Kullanilabilir: $' + ((data.toplam_bakiye||0)-(data.kilitli_teminat||0)).toFixed(2) + '</div>';
         pnlCard.innerHTML = '<div class="label">Acik Kar/Zarar</div><div class="value" style="color:' + ((data.acik_kar_zarar||0)>=0?'#4caf50':'#f44336') + ';">$' + (data.acik_kar_zarar||0).toFixed(2) + '</div><div class="subtext">Pozisyon: ' + (data.acik_pozisyon_sayisi||0) + ' | Kazanma: %' + (data.kazanma_orani||0).toFixed(1) + '</div>';
         var kapaliCard = document.getElementById('islemKapaliCard');
         if (kapaliCard) {
             var kapaliKz = data.toplam_kapali_kar || 0;
-            kapaliCard.innerHTML = '<div class="label">Kapanan Islemler K/Z</div><div class="value" style="color:' + (kapaliKz>=0?'#4caf50':'#f44336') + ';">$' + kapaliKz.toFixed(2) + '</div><div class="subtext">Islem: ' + (data.kapanan_islem_sayisi||0) + ' | Kazanma: %' + (data.kazanma_orani||0).toFixed(1) + '</div>';
+            kapaliCard.innerHTML = '<div class="label">Kapanan Islemler K/Z</div><div class="value" style="color:' + (kapaliKz>=0?'#4caf50':'#f44336') + ';">$' + kapaliKz.toFixed(2) + '</div><div class="subtext">Islem: ' + (data.kapanan_islem_sayisi||0) + ' | Komisyon: $' + komisyon.toFixed(4) + '</div>';
+        }
+        var uptimeDiv = document.getElementById('uptimeDisplay');
+        if (uptimeDiv && data.baslangic_zamani) {
+            var diff = (Date.now() - new Date(data.baslangic_zamani).getTime()) / 1000;
+            var gun = Math.floor(diff / 86400); var saat = Math.floor((diff % 86400) / 3600); var dk = Math.floor((diff % 3600) / 60);
+            var uptxt = (gun > 0 ? gun + 'g ' : '') + saat + 's ' + dk + 'dk';
+            uptimeDiv.innerHTML = '<i class="fas fa-clock" style="color:var(--accent-blue);margin-right:4px;"></i> Calisma: ' + uptxt;
         }
 
         if (data.acik_pozisyonlar && data.acik_pozisyonlar.length > 0) {

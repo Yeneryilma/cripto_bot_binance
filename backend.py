@@ -1005,26 +1005,29 @@ class PaperTrader:
         entry = pos['entry_price']
         satilan_notional = satilan_miktar * current_price
         satilan_teminat = satilan_notional / leverage
-        komisyon = satilan_notional * self.KOMISYON_ORANI
+        komisyon_exit = satilan_notional * self.KOMISYON_ORANI
+        komisyon_entry = pos.get('toplam_komisyon', 0) * (yuzde / 100)
+        toplam_komisyon = komisyon_entry + komisyon_exit
         if current_price and pos['direction'] == 'LONG':
-            pnl = (current_price - entry) * satilan_miktar
+            raw_pnl = (current_price - entry) * satilan_miktar
         elif current_price and pos['direction'] == 'SHORT':
-            pnl = (entry - current_price) * satilan_miktar
+            raw_pnl = (entry - current_price) * satilan_miktar
         else:
-            pnl = 0
-        pnl -= komisyon
+            raw_pnl = 0
+        displayed_pnl = raw_pnl - toplam_komisyon
+        balance_pnl = raw_pnl - komisyon_exit
         pos['quantity'] -= satilan_miktar
         pos['position_value'] = round(pos['quantity'] * entry, 2)
         pos['teminat'] = round(pos['quantity'] * entry / leverage, 2)
-        pos['toplam_komisyon'] = round(pos.get('toplam_komisyon', 0) + komisyon, 4)
+        pos['toplam_komisyon'] = round(pos.get('toplam_komisyon', 0) - komisyon_entry, 4)
         self.locked_margin -= satilan_teminat
-        self.balance += satilan_teminat + pnl
+        self.balance += satilan_teminat + balance_pnl
         self.total_trades += 1
-        if pnl > 0:
+        if displayed_pnl > 0:
             self.winning_trades += 1
         else:
             self.losing_trades += 1
-        pnl_percent = (pnl / satilan_teminat * 100) if satilan_teminat > 0 else 0
+        pnl_percent = (displayed_pnl / satilan_teminat * 100) if satilan_teminat > 0 else 0
         self.trade_history.append({
             'symbol': symbol,
             'direction': pos['direction'],
@@ -1039,9 +1042,9 @@ class PaperTrader:
             'open_time': pos['open_time'],
             'close_time': datetime.now().isoformat(),
             'close_price': current_price or entry,
-            'pnl': round(pnl, 2),
+            'pnl': round(displayed_pnl, 2),
             'pnl_percent': round(pnl_percent, 2),
-            'komisyon': round(komisyon, 4),
+            'komisyon': round(toplam_komisyon, 4),
             'reason': reason
         })
         return True
@@ -1092,26 +1095,28 @@ class PaperTrader:
         if symbol not in self.positions:
             return
         pos = self.positions.pop(symbol)
-        pnl = self._position_pnl(pos, close_price)
+        raw_pnl = self._position_pnl(pos, close_price)
         pos_value = pos.get('position_value', 0)
         leverage = pos.get('leverage', 1)
         teminat = pos.get('teminat', pos_value / leverage)
-        komisyon = pos_value * self.KOMISYON_ORANI
-        pnl -= komisyon
-        toplam_komisyon = pos.get('toplam_komisyon', 0) + komisyon
-        pnl_percent = (pnl / teminat * 100) if teminat > 0 else 0
+        komisyon_entry = pos.get('toplam_komisyon', 0)
+        komisyon_exit = pos_value * self.KOMISYON_ORANI
+        toplam_komisyon = komisyon_entry + komisyon_exit
+        displayed_pnl = raw_pnl - toplam_komisyon
+        balance_pnl = raw_pnl - komisyon_exit
+        pnl_percent = (displayed_pnl / teminat * 100) if teminat > 0 else 0
         self.locked_margin -= teminat
-        self.balance += teminat + pnl
+        self.balance += teminat + balance_pnl
         self.total_trades += 1
-        if pnl > 0:
+        if displayed_pnl > 0:
             self.winning_trades += 1
         else:
             self.losing_trades += 1
         pos['close_time'] = datetime.now().isoformat()
         pos['close_price'] = close_price
-        pos['pnl'] = round(pnl, 2)
+        pos['pnl'] = round(displayed_pnl, 2)
         pos['pnl_percent'] = round(pnl_percent, 2)
-        pos['komisyon'] = round(komisyon, 4)
+        pos['komisyon'] = round(toplam_komisyon, 4)
         pos['toplam_komisyon'] = round(toplam_komisyon, 4)
         pos['reason'] = reason
         self.trade_history.append(pos)
@@ -1131,6 +1136,7 @@ class PaperTrader:
         total_equity = round(self.balance + self.locked_margin + open_pnl, 2)
         win_rate = (self.winning_trades / self.total_trades * 100) if self.total_trades > 0 else 0
         toplam_kapali_kar = round(sum(t.get('pnl', 0) for t in self.trade_history), 2)
+        toplam_komisyon = round(sum(t.get('komisyon', 0) for t in self.trade_history), 4)
 
         positions_with_pnl = []
         for sym, pos in self.positions.items():
@@ -1161,6 +1167,7 @@ class PaperTrader:
             'kilitli_teminat': self.locked_margin,
             'acik_kar_zarar': round(open_pnl, 2),
             'toplam_kapali_kar': toplam_kapali_kar,
+            'toplam_komisyon': toplam_komisyon,
             'ozsermaye': total_equity,
             'acik_pozisyon_sayisi': len(self.positions),
             'toplam_islem': self.total_trades,
@@ -1778,6 +1785,7 @@ class BinanceLiveTrader:
             'close_price': fill_price,
             'pnl': round(realized_pnl, 4),
             'pnl_yuzde': round(realized_pnl / (entry * qty) * 100, 2) if entry > 0 and qty > 0 else 0,
+            'komisyon': round(komisyon, 4),
             'timeframe': local.get('timeframe', '?'),
             'leverage': local.get('leverage', 1),
             'base_dolar': local.get('base_dolar', 0),
@@ -1817,6 +1825,7 @@ class BinanceLiveTrader:
         total_margin = sum(p['teminat'] for p in positions) if isinstance(positions, list) else 0
         win_rate = (self.winning_trades / (self.winning_trades + self.losing_trades) * 100) if (self.winning_trades + self.losing_trades) > 0 else 0
         toplam_kapali_kar = round(sum(t.get('pnl', 0) for t in self.trade_history), 4)
+        toplam_komisyon = round(sum(t.get('komisyon', 0) for t in self.trade_history), 4)
 
         return {
             'durum': self.durum,
@@ -1827,6 +1836,7 @@ class BinanceLiveTrader:
             'toplam_bakiye': balance.get('bakiye', 0) if isinstance(balance, dict) and 'error' not in balance else 0,
             'acik_kar_zarar': round(total_pnl, 4),
             'toplam_kapali_kar': toplam_kapali_kar,
+            'toplam_komisyon': toplam_komisyon,
             'kilitli_teminat': round(total_margin, 2),
             'acik_pozisyon_sayisi': len(positions) if isinstance(positions, list) else 0,
             'toplam_islem': self.total_trades,
@@ -1894,6 +1904,7 @@ class BinanceLiveTrader:
                     'close_price': fill_price,
                     'pnl': round(realized_pnl, 4),
                     'pnl_yuzde': round(realized_pnl / notional * 100, 2) if notional > 0 else 0,
+                    'komisyon': round(komisyon, 4),
                     'timeframe': timeframe,
                     'leverage': leverage,
                     'base_dolar': base_dolar,
@@ -2173,6 +2184,7 @@ class BinanceLiveTrader:
             'entry_price': entry, 'close_price': fill_price,
             'pnl': round(realized_pnl, 4),
             'pnl_yuzde': round(realized_pnl / (entry * qty) * 100, 2) if entry > 0 and qty > 0 else 0,
+            'komisyon': round(komisyon, 4),
             'timeframe': local.get('timeframe', '?'),
             'leverage': local.get('leverage', 1),
             'reason': 'KISMI_SATIS',
