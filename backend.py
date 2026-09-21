@@ -1279,6 +1279,7 @@ class BinanceLiveTrader:
             'winning_trades': self.winning_trades,
             'losing_trades': self.losing_trades,
             'start_time': self.start_time,
+            'baslama_zamani': getattr(self, 'baslama_zamani', None),
             'son_islem_zamani': {k: v.isoformat() for k, v in self.son_islem_zamani.items()},
             'trade_history': self.trade_history[-500:],
             'local_positions': self.local_positions
@@ -1297,6 +1298,7 @@ class BinanceLiveTrader:
                 self.winning_trades = state.get('winning_trades', 0)
                 self.losing_trades = state.get('losing_trades', 0)
                 self.start_time = state.get('start_time', datetime.now().isoformat())
+                self.baslama_zamani = state.get('baslama_zamani', None)
                 self.son_islem_zamani = {k: datetime.fromisoformat(v) for k, v in state.get('son_islem_zamani', {}).items()}
                 self.trade_history = state.get('trade_history', [])
                 self.local_positions = state.get('local_positions', {})
