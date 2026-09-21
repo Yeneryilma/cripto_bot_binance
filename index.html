@@ -154,9 +154,64 @@
         .trading-view-modal {
             display: none;
         }
+
+        /* Login Overlay */
+        .login-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: var(--bg-primary); z-index: 9999;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .login-box {
+            background: var(--bg-card); border: 1px solid var(--border-color);
+            border-radius: 16px; padding: 40px; text-align: center;
+            max-width: 380px; width: 90%;
+        }
+        .login-box h2 { color: var(--text-primary); margin-bottom: 8px; font-size: 20px; }
+        .login-box p { color: var(--text-muted); font-size: 13px; margin-bottom: 24px; }
+        .login-box input {
+            width: 100%; padding: 12px 14px; background: var(--bg-primary);
+            border: 1px solid var(--border-color); color: var(--text-primary);
+            border-radius: 8px; font-size: 15px; margin-bottom: 14px; text-align: center;
+        }
+        .login-box input:focus { outline: none; border-color: var(--accent-blue); }
+        .login-box .login-btn {
+            width: 100%; padding: 12px; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 600; cursor: pointer; margin-bottom: 10px;
+        }
+        .login-btn-primary { background: var(--accent-blue); color: white; }
+        .login-btn-primary:hover { background: #2563eb; }
+        .login-btn-secondary { background: var(--bg-secondary); color: var(--text-muted); border: 1px solid var(--border-color) !important; }
+        .login-btn-secondary:hover { color: var(--text-primary); border-color: var(--border-hover) !important; }
+        .login-error { color: var(--accent-red); font-size: 12px; margin-top: 8px; display: none; }
+
+        /* Viewer mode badge */
+        .viewer-badge {
+            display: none; padding: 4px 12px; background: #ff980033;
+            color: #ff9800; border-radius: 12px; font-size: 11px; font-weight: 600;
+            border: 1px solid #ff980055;
+        }
+        body.viewer-mode .viewer-badge { display: inline-block; }
+
+        /* Viewer mode: disable interactive elements */
+        body.viewer-mode .viewer-control { display: none !important; }
+        body.viewer-mode #tabSettings { display: none !important; }
+        body.viewer-mode .tab[onclick*="settings"] { display: none !important; }
+        body.viewer-mode .tab[onclick*="islem"] { opacity: 0.5; pointer-events: none; }
     </style>
 </head>
 <body>
+
+<div class="login-overlay" id="loginOverlay">
+    <div class="login-box">
+        <i class="fas fa-lock" style="font-size:36px;color:var(--accent-yellow);margin-bottom:16px;"></i>
+        <h2>Kripto Futures Analiz</h2>
+        <p>Sifre ile giris yapin veya izleme moduna gecin</p>
+        <input type="password" id="loginPassword" placeholder="Sifre" onkeydown="if(event.key==='Enter')doLogin()">
+        <button class="login-btn login-btn-primary" onclick="doLogin()"><i class="fas fa-sign-in-alt"></i> Giris Yap</button>
+        <button class="login-btn login-btn-secondary" onclick="doSkip()"><i class="fas fa-eye"></i> Izleme Modu</button>
+        <div class="login-error" id="loginError">Yanlis sifre!</div>
+    </div>
+</div>
 
 <div class="header">
     <div class="container">
@@ -165,6 +220,7 @@
             <span>Kripto Futures Analiz</span>
         </div>
         <div class="header-status">
+            <span class="viewer-badge"><i class="fas fa-eye"></i> IZLEME MODU</span>
             <span><span class="status-dot active" id="statusDot"></span> <span id="statusText">Sistem Aktif</span></span>
             <span id="clock" style="color: var(--text-muted);"></span>
             <button onclick="refreshAll()" style="background: none; border: none; color: var(--text-muted); cursor: pointer;">
@@ -205,7 +261,7 @@
     <div id="tabOzet" class="tab-content" style="display:none;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
             <div class="section-title" style="margin:0;"><i class="fas fa-chart-pie"></i> Islem Ozeti</div>
-            <button onclick="resetStats()" style="padding:6px 14px;border:1px solid var(--accent-red);background:transparent;color:var(--accent-red);border-radius:6px;cursor:pointer;font-size:12px;">Sifirla</button>
+            <button onclick="resetStats()" class="viewer-control" style="padding:6px 14px;border:1px solid var(--accent-red);background:transparent;color:var(--accent-red);border-radius:6px;cursor:pointer;font-size:12px;">Sifirla</button>
         </div>
         <div id="summaryContent"></div>
     </div>
@@ -246,7 +302,7 @@
     <div id="tabIslem" class="tab-content" style="display:none;">
         <div class="section-title"><i class="fas fa-exchange-alt"></i> Islem Paneli</div>
 
-        <div class="market-card" style="margin-bottom:16px;">
+        <div class="market-card viewer-control" style="margin-bottom:16px;">
             <div class="label">Islem Modu</div>
             <div style="margin-top:12px;display:flex;gap:12px;flex-wrap:wrap;">
                 <button onclick="switchActiveMode('test')" id="btnModeTest" style="padding:14px 32px;border:2px solid #2196f3;background:#2196f3;color:white;border-radius:8px;cursor:pointer;font-size:15px;font-weight:600;">
@@ -259,7 +315,7 @@
             <div id="activeModeInfo" style="margin-top:12px;font-size:14px;color:var(--text-muted);"></div>
         </div>
 
-        <div class="market-card" style="margin-bottom:16px;">
+        <div class="market-card viewer-control" style="margin-bottom:16px;">
             <div class="label">Kontrol</div>
             <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
                 <button onclick="startLive()" class="btn-success" style="padding:10px 20px;">
@@ -307,7 +363,7 @@
         <div class="market-card">
             <div style="display:flex;justify-content:space-between;align-items:center;">
                 <div class="label" style="margin:0;">Islem Gecmisi (Son 50)</div>
-                <button onclick="clearHistory()" style="padding:4px 10px;background:#f44336;color:white;border:none;border-radius:4px;cursor:pointer;font-size:10px;">Gecmisi Temizle</button>
+                <button onclick="clearHistory()" class="viewer-control" style="padding:4px 10px;background:#f44336;color:white;border:none;border-radius:4px;cursor:pointer;font-size:10px;">Gecmisi Temizle</button>
             </div>
             <div id="islemHistory" style="margin-top:8px;font-size:11px;color:var(--text-muted);">Gecmis yok.</div>
         </div>
@@ -936,7 +992,7 @@ async function refreshIslem() {
                         '<div style="grid-column:span 2;">Giris Tarihi: <b style="color:var(--text-primary);">' + girisTarih + '</b></div>' +
                     '</div>' +
                     '<div style="margin-top:8px;text-align:right;">' +
-                        '<button onclick="closePosition(\'' + p.symbol + '\', \'' + p.yon + '\')" style="padding:5px 14px;background:#f44336;color:white;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;">Kapat</button>' +
+                        '<button onclick="closePosition(\'' + p.symbol + '\', \'' + p.yon + '\')" class="viewer-control" style="padding:5px 14px;background:#f44336;color:white;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;">Kapat</button>' +
                     '</div>' +
                 '</div>';
             }).join('');
@@ -1044,9 +1100,47 @@ async function saveSettings() {
 }
 
 // ============================
+// AUTH / PASSWORD
+// ============================
+let isViewer = false;
+
+function doLogin() {
+    const pw = document.getElementById('loginPassword').value;
+    if (pw === 'Gokcenaz') {
+        isViewer = false;
+        sessionStorage.setItem('auth', 'full');
+        document.getElementById('loginOverlay').style.display = 'none';
+    } else {
+        document.getElementById('loginError').style.display = 'block';
+        document.getElementById('loginPassword').value = '';
+        document.getElementById('loginPassword').focus();
+    }
+}
+
+function doSkip() {
+    isViewer = true;
+    sessionStorage.setItem('auth', 'viewer');
+    document.getElementById('loginOverlay').style.display = 'none';
+    document.body.classList.add('viewer-mode');
+}
+
+function checkAuth() {
+    const auth = sessionStorage.getItem('auth');
+    if (auth === 'full') {
+        document.getElementById('loginOverlay').style.display = 'none';
+        isViewer = false;
+    } else if (auth === 'viewer') {
+        document.getElementById('loginOverlay').style.display = 'none';
+        isViewer = true;
+        document.body.classList.add('viewer-mode');
+    }
+}
+
+// ============================
 // INIT
 // ============================
 document.addEventListener('DOMContentLoaded', () => {
+    checkAuth();
     loadMarketOverview();
     loadNews();
     refreshAll();
