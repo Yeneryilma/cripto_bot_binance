@@ -1014,20 +1014,19 @@ class PaperTrader:
             raw_pnl = (entry - current_price) * satilan_miktar
         else:
             raw_pnl = 0
-        displayed_pnl = raw_pnl - toplam_komisyon
-        balance_pnl = raw_pnl - komisyon_exit
+        pnl = raw_pnl - toplam_komisyon
         pos['quantity'] -= satilan_miktar
         pos['position_value'] = round(pos['quantity'] * entry, 2)
         pos['teminat'] = round(pos['quantity'] * entry / leverage, 2)
         pos['toplam_komisyon'] = round(pos.get('toplam_komisyon', 0) - komisyon_entry, 4)
         self.locked_margin -= satilan_teminat
-        self.balance += satilan_teminat + balance_pnl
+        self.balance += satilan_teminat + pnl
         self.total_trades += 1
-        if displayed_pnl > 0:
+        if pnl > 0:
             self.winning_trades += 1
         else:
             self.losing_trades += 1
-        pnl_percent = (displayed_pnl / satilan_teminat * 100) if satilan_teminat > 0 else 0
+        pnl_percent = (pnl / satilan_teminat * 100) if satilan_teminat > 0 else 0
         self.trade_history.append({
             'symbol': symbol,
             'direction': pos['direction'],
@@ -1042,7 +1041,7 @@ class PaperTrader:
             'open_time': pos['open_time'],
             'close_time': datetime.now().isoformat(),
             'close_price': current_price or entry,
-            'pnl': round(displayed_pnl, 2),
+            'pnl': round(pnl, 2),
             'pnl_percent': round(pnl_percent, 2),
             'komisyon': round(toplam_komisyon, 4),
             'reason': reason
@@ -1055,7 +1054,7 @@ class PaperTrader:
         pos_value = base_dolar * leverage
         teminat = pos_value / leverage
         komisyon = pos_value * self.KOMISYON_ORANI
-        if teminat + komisyon > self.balance:
+        if teminat > self.balance:
             return
         quantity = pos_value / price
         if quantity <= 0:
@@ -1067,7 +1066,7 @@ class PaperTrader:
         else:
             initial_trailing = price * (1 + ts_pct)
 
-        self.balance -= (teminat + komisyon)
+        self.balance -= teminat
         self.locked_margin += teminat
         self.positions[symbol] = {
             'symbol': symbol,
@@ -1102,19 +1101,18 @@ class PaperTrader:
         komisyon_entry = pos.get('toplam_komisyon', 0)
         komisyon_exit = pos_value * self.KOMISYON_ORANI
         toplam_komisyon = komisyon_entry + komisyon_exit
-        displayed_pnl = raw_pnl - toplam_komisyon
-        balance_pnl = raw_pnl - komisyon_exit
-        pnl_percent = (displayed_pnl / teminat * 100) if teminat > 0 else 0
+        pnl = raw_pnl - toplam_komisyon
+        pnl_percent = (pnl / teminat * 100) if teminat > 0 else 0
         self.locked_margin -= teminat
-        self.balance += teminat + balance_pnl
+        self.balance += teminat + pnl
         self.total_trades += 1
-        if displayed_pnl > 0:
+        if pnl > 0:
             self.winning_trades += 1
         else:
             self.losing_trades += 1
         pos['close_time'] = datetime.now().isoformat()
         pos['close_price'] = close_price
-        pos['pnl'] = round(displayed_pnl, 2)
+        pos['pnl'] = round(pnl, 2)
         pos['pnl_percent'] = round(pnl_percent, 2)
         pos['komisyon'] = round(toplam_komisyon, 4)
         pos['toplam_komisyon'] = round(toplam_komisyon, 4)
@@ -1129,7 +1127,9 @@ class PaperTrader:
         total_locked = 0
         for pos in self.positions.values():
             current_price = pos.get('current_price', pos['entry_price'])
-            open_pnl += self._position_pnl(pos, current_price)
+            raw = self._position_pnl(pos, current_price)
+            komisyon_entry = pos.get('toplam_komisyon', 0)
+            open_pnl += raw - komisyon_entry
             total_locked += pos.get('teminat', pos.get('position_value', 0) / pos.get('leverage', 1))
         self.locked_margin = round(total_locked, 2)
 
