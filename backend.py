@@ -1176,6 +1176,7 @@ class PaperTrader:
             'kaybeden': self.losing_trades,
             'kazanma_orani': round(win_rate, 1),
             'baslangic_zamani': self.start_time,
+            'baslama_zamani': getattr(self, 'baslama_zamani', None),
             'equity_curve': self.equity_curve[-50:],
             'acik_pozisyonlar': positions_with_pnl
         }
@@ -1845,6 +1846,7 @@ class BinanceLiveTrader:
             'kaybeden': self.losing_trades,
             'kazanma_orani': round(win_rate, 1),
             'baslangic_zamani': self.start_time,
+            'baslama_zamani': getattr(self, 'baslama_zamani', None),
             'acik_pozisyonlar': positions if isinstance(positions, list) else [],
             'hata': balance.get('error') if isinstance(balance, dict) and 'error' in balance else None,
             'trade_history': self.trade_history[-50:],
@@ -2707,6 +2709,7 @@ def paper_control():
     kapatilamayan = None
     if cmd == 'baslat':
         paper_trader.durum = 'baslat'
+        paper_trader.baslama_zamani = datetime.now().isoformat()
     elif cmd == 'durdur':
         paper_trader.durum = 'durdu'
         kapatilan = []
@@ -2815,6 +2818,7 @@ def live_start():
     if not active.get('api_key'):
         return jsonify({'hata': f'Once {live_trader.config.get("active_mode","test")} icin API key tanimlayin'})
     live_trader.durum = 'aktif'
+    live_trader.baslama_zamani = datetime.now().isoformat()
     live_trader._save_trader_state()
     return jsonify({'mesaj': f'{live_trader.config["active_mode"]} modunda canli islem baslatildi'})
 
