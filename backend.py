@@ -2853,8 +2853,9 @@ def live_clear_history():
     live_trader.total_trades = 0
     live_trader.winning_trades = 0
     live_trader.losing_trades = 0
+    live_trader.local_positions = {}
     live_trader._save_trader_state()
-    return jsonify({'mesaj': 'Islem gecmisi temizlendi'})
+    return jsonify({'mesaj': 'Islem gecmisi ve local pozisyonlar temizlendi'})
 
 @app.route('/api/live/open', methods=['POST'])
 def live_open():
