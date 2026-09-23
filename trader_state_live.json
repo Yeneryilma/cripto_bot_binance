@@ -3,7 +3,8 @@
   "total_trades": 0,
   "winning_trades": 0,
   "losing_trades": 0,
-  "start_time": "2026-08-29T22:06:22.744567",
+  "start_time": "",
+  "baslama_zamani": null,
   "son_islem_zamani": {},
   "trade_history": [],
   "local_positions": {}

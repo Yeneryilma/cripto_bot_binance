@@ -150,6 +150,12 @@ class LiveDataFetcher:
         self._last_kline_time = 0
         self._kline_lock = threading.Lock()
         self.last_used_weight = 0
+        # --- HIZ: OHLCV onbellegi + weight tabanli hiz siniri durumu ---
+        self._ohlcv_cache = {}
+        self._ohlcv_cache_lock = threading.Lock()
+        self.OHLCV_TTL = {'1m': 20, '3m': 40, '5m': 60, '15m': 120,
+                          '1h': 300, '4h': 600, '1d': 900}
+        self._kline_weight_limit = 2000
         self.news_cache = []
         self.news_cache_time = None
         self.last_error = None
@@ -291,12 +297,21 @@ class LiveDataFetcher:
         binance_sym = Config.to_binance_symbol(symbol)
         interval = self.TF_KLINE_INTERVAL.get(timeframe, '15m')
 
-        with self._kline_lock:
-            now = time.time()
-            elapsed = now - self._last_kline_time
-            if elapsed < 0.2:
-                time.sleep(0.2 - elapsed)
-            self._last_kline_time = time.time()
+        # 1) ONBELLEK: ayni coin+TF+limit kisa sure icinde tekrar cekilmesin
+        ck = (binance_sym, interval, limit)
+        ttl = self.OHLCV_TTL.get(timeframe, 60)
+        with self._ohlcv_cache_lock:
+            hit = self._ohlcv_cache.get(ck)
+        if hit is not None and (time.time() - hit[0]) < ttl:
+            return hit[1].copy()
+
+        # 2) HIZ: eskiden HER istek 0.2 sn bekletilip serileştiriliyordu.
+        # Artik bekleme yok; yalnizca weight limiti asilirsa kisaca beklenir
+        # (en fazla ~5 sn - sonsuz dongu olmamasi icin sinirli).
+        for _ in range(20):
+            if getattr(self, 'last_used_weight', 0) <= self._kline_weight_limit:
+                break
+            time.sleep(0.25)
 
         try:
             url = f'{_get_market_data_url()}/fapi/v1/klines'
@@ -328,8 +343,15 @@ class LiveDataFetcher:
             df = pd.DataFrame(ohlcv)
             if not df.empty:
                 df.set_index('timestamp', inplace=True)
+                # KOPYASINI sakla: cagiran taraf df uzerinde indikator ekleyip
+                # degistirebilir, onbellek kirlenmesin.
+                with self._ohlcv_cache_lock:
+                    self._ohlcv_cache[ck] = (time.time(), df.copy())
+                    if len(self._ohlcv_cache) > 600:
+                        en_eski = sorted(self._ohlcv_cache.items(), key=lambda kv: kv[1][0])[:100]
+                        for k, _v in en_eski:
+                            self._ohlcv_cache.pop(k, None)
             return df
-
         except Exception as e:
             self.last_error = 'Binance klines {} baglanti hatasi: {}'.format(symbol, str(e)[:120])
             logger.warning(self.last_error)
@@ -837,7 +859,7 @@ class RiskManager:
 class PaperTrader:
     """Sanal islem sistemi - bakiye = kullanilabilir nakit, teminat ayri takip edilir"""
 
-    KOMISYON_ORANI = 0.0004  # Binance Futures taker: %0.04
+    KOMISYON_ORANI = 0.0005  # Binance Futures taker: %0.04
 
     def __init__(self, initial_balance=100):
         self.initial_balance = initial_balance
@@ -1099,7 +1121,8 @@ class PaperTrader:
         leverage = pos.get('leverage', 1)
         teminat = pos.get('teminat', pos_value / leverage)
         komisyon_entry = pos.get('toplam_komisyon', 0)
-        komisyon_exit = pos_value * self.KOMISYON_ORANI
+        exit_notional = pos.get('quantity', 0) * close_price
+        komisyon_exit = exit_notional * self.KOMISYON_ORANI
         toplam_komisyon = komisyon_entry + komisyon_exit
         pnl = raw_pnl - toplam_komisyon
         pnl_percent = (pnl / teminat * 100) if teminat > 0 else 0
@@ -1198,7 +1221,7 @@ BINANCE_TESTNET_URL = 'https://testnet.binancefuture.com'
 class BinanceLiveTrader:
     """Binance Futures ile canli islem - test/live + otomatik islem"""
 
-    KOMISYON_ORANI = 0.0004
+    KOMISYON_ORANI = 0.0005
 
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1889,7 +1912,7 @@ class BinanceLiveTrader:
                 if abs(fill_price - entry) / entry > max_deviation:
                     logger.warning('[ORPHAN] Fill price entry cok uzak: %s entry=%.6f fill=%.6f - entry kullaniyor', sym, entry, fill_price)
                     fill_price = entry
-                qty = (base_dolar * leverage / entry) if entry > 0 else 0
+                qty = local.get('kalan_miktar') or ((base_dolar * leverage / entry) if entry > 0 else 0)
                 notional = fill_price * qty
                 komisyon = notional * self.KOMISYON_ORANI * 2
                 if direction == 'LONG':
@@ -2168,7 +2191,7 @@ class BinanceLiveTrader:
 
         entry = pos['giris_fiyati']
         notional = fill_price * qty
-        komisyon = notional * self.KOMISYON_ORANI
+        komisyon = notional * self.KOMISYON_ORANI * 2
         if direction == 'LONG':
             realized_pnl = (fill_price - entry) * qty - komisyon
         else:
@@ -2228,7 +2251,7 @@ class BinanceLiveTrader:
             if key in self.local_positions:
                 self.local_positions[key]['kismi_satis'] = True
                 self.local_positions[key]['son_kismi_satis_zamani'] = datetime.now().isoformat()
-
+                self.local_positions[key]['kalan_miktar'] = max(0.0, round(abs(pos['miktar']) - qty, 10))
         self._save_trader_state()
 
         return result
@@ -2419,6 +2442,9 @@ live_trader = BinanceLiveTrader()
 
 _last_scan_time = 0
 _scan_lock = threading.Lock()
+_scan_in_progress = False      # eszamanli tarama korumasi
+_scan_id = 0                   # her basarili tarama icin artan surum no
+_scan_id_lock = threading.Lock()
 
 SCAN_MIN_INTERVAL_FLOOR = 20
 SCAN_MIN_INTERVAL_CEILING = 90
@@ -2491,15 +2517,24 @@ _last_scan_result = None
 
 @app.route('/api/market/all')
 def get_all_analysis():
-    global _last_scan_time, _last_scan_result
+    global _last_scan_time, _last_scan_result, _scan_in_progress, _scan_id
     tf = request.args.get('timeframe', '15m')
+    force = request.args.get('force', '0') in ('1', 'true', 'True')
     now = time.time()
 
     scan_interval, used_weight, ratio_pct = _get_dynamic_scan_interval()
 
+    # 1) Onbellek gecerliyse ve force yoksa dogrudan don
     with _scan_lock:
-        if now - _last_scan_time < scan_interval and _last_scan_result is not None:
+        if (not force) and (now - _last_scan_time < scan_interval) and _last_scan_result is not None:
             return jsonify(_last_scan_result)
+
+    # 2) Ayni anda ikinci bir tarama baslamasin
+    if _scan_in_progress:
+        if _last_scan_result is not None:
+            return jsonify(_last_scan_result)
+        return jsonify({'durum': 'tarama_suruyor'}), 202
+    _scan_in_progress = True
 
     refresh_saat = PAPER_SETTINGS.get('top_liste_yenileme_saat', 6)
     if now - config.TOP_VOLUME_LAST_REFRESH > refresh_saat * 3600:
@@ -2524,6 +2559,7 @@ def get_all_analysis():
     data_fetcher._fetch_live_prices()
     if not data_fetcher._live_prices:
         reason = data_fetcher.last_error or 'Binance fiyat verisi alinamadi.'
+        _scan_in_progress = False
         return jsonify({'error': 'Canli veri alinamadi.', 'reason': reason}), 503
 
     min_vol = PAPER_SETTINGS.get('min_hacim_24h', 0)
@@ -2578,7 +2614,7 @@ def get_all_analysis():
         }
 
     results = []
-    with ThreadPoolExecutor(max_workers=15) as executor:
+    with ThreadPoolExecutor(max_workers=20) as executor:
         futures = {executor.submit(_process_coin, pair): pair for pair in all_pairs}
         for future in as_completed(futures):
             pair = futures[future]
@@ -2591,6 +2627,7 @@ def get_all_analysis():
 
     if not results:
         reason = data_fetcher.last_error or 'Canli OHLCV verisi alinamadi.'
+        _scan_in_progress = False
         return jsonify({'error': 'Canli veri alinamadi.', 'reason': reason}), 503
 
     results.sort(key=lambda x: x.get('guven_puani', 0), reverse=True)
@@ -2612,10 +2649,16 @@ def get_all_analysis():
         'tarama_araligi_sn': scan_interval,
         'rate_limit_kullanim_yuzdesi': ratio_pct
     }
+    with _scan_id_lock:
+        _scan_id += 1
+        scan_no = _scan_id
+    response_data['scan_id'] = scan_no
+    response_data['tarama_tamamlandi'] = True
+
     with _scan_lock:
         _last_scan_time = time.time()
         _last_scan_result = response_data
-
+    _scan_in_progress = False
     return jsonify(response_data)
 
 @app.route('/api/market/news')
